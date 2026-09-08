@@ -1,12 +1,12 @@
 package com.ciaozn.alphatrader.app.config;
 
+import com.ciaozn.alphatrader.common.portfolio.Portfolio;
 import com.ciaozn.alphatrader.common.time.Clock;
 import com.ciaozn.alphatrader.common.time.SystemClock;
 import com.ciaozn.alphatrader.common.time.VirtualClock;
 import com.ciaozn.alphatrader.engine.EventEngine;
 import com.ciaozn.alphatrader.engine.EventJournal;
 import com.ciaozn.alphatrader.engine.JsonlEventJournal;
-import com.ciaozn.alphatrader.strategy.EchoStrategy;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
@@ -16,8 +16,8 @@ import java.time.format.DateTimeFormatter;
 
 /**
  * Core wiring: the three replaceable parts of the isomorphism (DESIGN §10):
- * Clock, market data source, executor. This class owns Clock + journal + engine;
- * gateways/executors live in profile-specific configs.
+ * Clock, market data source, executor. This class owns Clock + journal + engine + the account
+ * book; gateways/executors live in profile-specific configs.
  */
 @Configuration
 public class EngineConfig {
@@ -46,9 +46,14 @@ public class EngineConfig {
         return new EventEngine(journal, clock);
     }
 
-    /** P1 placeholder proving the data path; replaced by the Strategy SPI assembly in P2. */
+    /**
+     * The one account book every component reads and updates: strategies see positions through
+     * it, the backtest matcher fills into it, and from P3 the OMS reconciles it against the
+     * exchange (FR-EX-04). Shared arithmetic is what keeps backtest and live from drifting
+     * apart (FR-BT-06).
+     */
     @Bean
-    EchoStrategy echoStrategy() {
-        return new EchoStrategy();
+    Portfolio portfolio(AlphaProperties properties) {
+        return new Portfolio(properties.initialCash());
     }
 }

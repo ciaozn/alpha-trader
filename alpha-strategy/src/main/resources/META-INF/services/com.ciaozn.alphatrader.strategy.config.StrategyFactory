@@ -1,0 +1,2 @@
+com.ciaozn.alphatrader.strategy.builtin.MaCrossStrategyFactory
+com.ciaozn.alphatrader.strategy.builtin.RsiReversalStrategyFactory

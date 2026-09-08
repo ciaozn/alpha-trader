@@ -14,6 +14,30 @@ alpha:
   trading:
     enabled: false
   journal-dir: logs
+  # Starting book for backtest and paper. Live reconciles it against the exchange from P3.
+  initial-cash: 10000
+  # Enabling a strategy here is all it takes to run it in backtest, paper and live alike -
+  # the engine, risk pipeline and OMS never change (FR-ST-01, spec scenario 6).
+  # Parameter keys are matched ignoring case, '-' and '_'; an unknown key fails startup.
+  strategies:
+    - id: ma-cross-btc
+      type: ma-cross
+      enabled: true
+      params:
+        fast-period: 10
+        slow-period: 30
+        allow-short: true
+    # Off by default: until P3 nets positions per strategy, two strategies on one symbol would
+    # each size their own order and quietly double the exposure.
+    - id: rsi-reversal-btc
+      type: rsi-reversal
+      enabled: false
+      params:
+        period: 14
+        oversold: 30
+        overbought: 70
+        atr-period: 14
+        min-atr-percent: 0
 
 logging:
   level:
