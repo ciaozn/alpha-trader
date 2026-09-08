@@ -3,6 +3,7 @@ package com.ciaozn.alphatrader.strategy;
 import com.ciaozn.alphatrader.common.event.FillEvent;
 import com.ciaozn.alphatrader.common.event.KlineEvent;
 import com.ciaozn.alphatrader.common.event.TimerEvent;
+import com.ciaozn.alphatrader.common.model.Interval;
 import com.ciaozn.alphatrader.common.model.Symbol;
 
 import java.util.Set;
@@ -26,6 +27,9 @@ public interface Strategy {
 
     /** Symbols this strategy trades; k-lines for other symbols are never delivered. */
     Set<Symbol> symbols();
+
+    /** The single timeframe this strategy evaluates (multi-timeframe is out of scope for v1). */
+    Interval interval();
 
     /**
      * Delivered for CLOSED bars only, in chronological order. Acting on closed bars is the
