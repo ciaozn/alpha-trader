@@ -1,0 +1,6 @@
+alpha:
+  mode: live
+  binance-testnet: false
+  trading:
+    # P5 only. Requires: API key with withdrawals DISABLED + IP whitelist (FR-SEC-02).
+    enabled: false

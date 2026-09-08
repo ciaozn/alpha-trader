@@ -1,0 +1,20 @@
+spring:
+  application:
+    name: alpha-trader
+  profiles:
+    # Safe default: backtest touches no network and no money.
+    active: backtest
+
+alpha:
+  mode: ${ALPHA_MODE:backtest}
+  symbols:
+    - BTCUSDT.PERP
+  interval: 1h
+  binance-testnet: true
+  trading:
+    enabled: false
+  journal-dir: logs
+
+logging:
+  level:
+    root: info

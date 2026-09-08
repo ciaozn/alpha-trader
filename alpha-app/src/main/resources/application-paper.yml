@@ -1,0 +1,6 @@
+alpha:
+  mode: paper
+  binance-testnet: true
+  trading:
+    # Flip to true in P3 when OMS lands; then BINANCE_API_KEY/SECRET env vars are required.
+    enabled: false

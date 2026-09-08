@@ -1,0 +1,5 @@
+alpha:
+  mode: backtest
+  # Backtest: no gateway, no credentials, VirtualClock. Feeder arrives in P2.
+  trading:
+    enabled: false

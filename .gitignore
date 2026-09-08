@@ -1,78 +1,30 @@
-##### macOS #####
-.DS_Store
-.AppleDouble
-.LSOverride
-._*
-.Spotlight-V100
-.Trashes
-
-##### IntelliJ IDEA #####
-.idea/
-*.iws
-*.iml
-*.ipr
-out/
-!**/src/main/**/out/
-!**/src/test/**/out/
-
-##### Eclipse / STS #####
-.apt_generated
-.classpath
-.factorypath
-.project
-.settings
-.springBeans
-.sts4-cache
-bin/
-!**/src/main/**/bin/
-!**/src/test/**/bin/
-
-##### NetBeans #####
-/nbproject/private/
-/nbbuild/
-/nbdist/
-
-##### VS Code #####
-.vscode/
-
-##### Maven #####
+# Build
 target/
-pom.xml.tag
-pom.xml.releaseBackup
-pom.xml.versionsBackup
-pom.xml.next
-pom.xml.versionsBackup
-release.properties
-dependency-reduced-pom.xml
-buildNumber.properties
-.flattened-pom.xml
-.mvn/timing.properties
-.mvn/wrapper/maven-wrapper.jar
-
-##### Gradle #####
-.gradle
-build/
-!gradle/wrapper/gradle-wrapper.jar
-!**/src/main/**/build/
-!**/src/test/**/build/
-
-##### Java 运行时产物 #####
 *.class
-*.log
-hs_err_pid*
-replay_pid*
-logs/
+*.jar
+!.mvn/wrapper/*.jar
 
-##### 密钥 / 证书 / 本地配置 #####
-# 交易类项目尤其注意：证书和密钥一旦入库即为泄漏事故
+# IDE
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# OS
+.DS_Store
+
+# WorkBuddy assistant data
+.workbuddy/
+
+# Secrets - NEVER commit
 .env
-.env.*
-!.env.example
 *.pem
 *.key
-*.p12
-*.jks
-*.keystore
-*.truststore
-src/main/resources/application-local.*
-src/main/resources/application-secret.*
+
+# Runtime
+logs/
+data/
+*.db
+*.sqlite
