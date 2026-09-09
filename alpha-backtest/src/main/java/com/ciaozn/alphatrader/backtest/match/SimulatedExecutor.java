@@ -172,8 +172,11 @@ public final class SimulatedExecutor implements EventHandler {
         Kline bar = event.kline();
         fillPending(event.symbol(), bar, event.timestamp(), publisher);
         portfolio.mark(event.symbol(), bar.close());
-        // Recorded after the fill: an order placed later in this round is placed into this bar,
-        // so this bar's amplitude - not the next one's - is what its slippage is estimated from.
+        // Recorded before this handler returns, and that is what makes it this bar's amplitude:
+        // publishing enqueues rather than calls, so every order placed in this round - a strategy's
+        // signal, or one emitted from onFill - is placed after onKline has finished and reads this
+        // bar. Its position relative to fillPending above is not load-bearing: a fill takes the
+        // slippage stored in its own Pending and never reads this map.
         slipOfLastBar.put(event.symbol(), slippageBps(bar));
         settleFunding(bar.closeTime());
     }
