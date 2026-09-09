@@ -25,6 +25,8 @@ target/
 
 # Runtime
 logs/
-data/
+# Anchored: an unanchored `data/` also matches Java packages named `data`
+# (src/main/java/**/data/) and silently hides real source from git.
+/data/
 *.db
 *.sqlite
