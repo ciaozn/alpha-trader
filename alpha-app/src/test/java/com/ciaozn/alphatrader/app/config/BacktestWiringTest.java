@@ -170,6 +170,10 @@ class BacktestWiringTest {
         // Raising the exposure without the cap is refused at binding time - a flip is one order of
         // 2 x exposure, so the shipped 20% cap would block every one of them (取舍 17).
         doubled.maxOrderNotionalFraction = new BigDecimal("1.20");
+        // And the portfolio level has to stand aside as well: it is wired into the shipped
+        // configuration since T308, and its 30% single-symbol cap is tighter than a 60% exposure.
+        // Which cap binds is asserted separately, in the test below.
+        doubled.maxPortfolioNotionalFraction = new BigDecimal("1.20");
         SimulatedExecutor.SimulatedFill bigger = firstFill(run(doubled));
 
         // Same signal, same bar, same price - only the quantity moved. Comparing the whole fill
@@ -184,6 +188,23 @@ class BacktestWiringTest {
         Fixture tiny = fixture();
         tiny.targetExposure = new BigDecimal("0.001");
         assertThat(run(tiny).fills()).isEmpty();
+    }
+
+    @Test
+    void theShippedPortfolioCapStopsAnOversizedOrderInARealRun() throws IOException {
+        Fixture oversized = fixture();
+        oversized.targetExposure = new BigDecimal("0.60");
+        // The order level stands aside, so the check that binds is the portfolio one: a 60% exposure
+        // is inside a 120% order cap but twice the shipped 30% single-symbol cap.
+        oversized.maxOrderNotionalFraction = new BigDecimal("1.20");
+        assertThat(run(oversized).fills()).isEmpty();
+
+        // Same fixture with the portfolio caps lifted as well, and it trades - so the emptiness above
+        // is the cap doing its job in a real run, not a strategy that stopped firing. The report
+        // carries executor rejections but not risk blocks, which is why the attribution is made by
+        // changing one knob rather than by reading a rule id off the run.
+        oversized.maxPortfolioNotionalFraction = new BigDecimal("1.20");
+        assertThat(run(oversized).fills()).isNotEmpty();
     }
 
     @Test
@@ -308,6 +329,7 @@ class BacktestWiringTest {
         private List<AlphaProperties.Backtest.SeriesEntry> series = List.of();
         private BigDecimal targetExposure;
         private BigDecimal maxOrderNotionalFraction;
+        private BigDecimal maxPortfolioNotionalFraction;
         private AlphaProperties.Backtest.Cost cost;
         private List<AlphaProperties.Backtest.RuleEntry> rules = List.of(
                 new AlphaProperties.Backtest.RuleEntry("BTCUSDT.PERP", BTC_RULES.tickSize(),
@@ -322,9 +344,11 @@ class BacktestWiringTest {
         }
 
         /**
-         * Only sizing is overridden here; the other four levels stay at DESIGN §8's defaults. The
-         * order cap is the one other knob a test may need, because it is coupled to the exposure:
-         * raising one without the other is refused at binding time.
+         * Only sizing is overridden by default; the other four levels stay at DESIGN §8's defaults,
+         * and since T308 they are <em>enforced</em> rather than declared. Two caps therefore have a
+         * knob: the order cap, because it is coupled to the exposure and raising one without the other
+         * is refused at binding time (取舍 17), and the portfolio cap, because a test that wants a
+         * bigger order than the shipped 30%/60% allows has to say so.
          */
         private AlphaProperties.Risk risk() {
             AlphaProperties.Risk defaults = AlphaProperties.Risk.DEFAULTS;
@@ -332,7 +356,13 @@ class BacktestWiringTest {
                     ? defaults.order()
                     : new AlphaProperties.Risk.Order(true, maxOrderNotionalFraction,
                             defaults.order().maxPriceDeviation());
-            return new AlphaProperties.Risk(defaults.account(), order, defaults.portfolio(),
+            // One value for both fractions: equal is legal (the record refuses only symbol > total),
+            // and a test that lifts the caps wants neither of them to be the one that binds.
+            AlphaProperties.Risk.Portfolio portfolio = maxPortfolioNotionalFraction == null
+                    ? defaults.portfolio()
+                    : new AlphaProperties.Risk.Portfolio(true, maxPortfolioNotionalFraction,
+                            maxPortfolioNotionalFraction);
+            return new AlphaProperties.Risk(defaults.account(), order, portfolio,
                     defaults.breaker(), defaults.frequency(),
                     new AlphaProperties.Risk.Sizing(targetExposure));
         }

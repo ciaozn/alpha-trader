@@ -15,7 +15,6 @@ import com.ciaozn.alphatrader.engine.EventEngine;
 import com.ciaozn.alphatrader.engine.EventJournal;
 import com.ciaozn.alphatrader.engine.JsonlEventJournal;
 import com.ciaozn.alphatrader.risk.PositionSizer;
-import com.ciaozn.alphatrader.risk.RiskPipeline;
 import com.ciaozn.alphatrader.strategy.Strategy;
 import com.ciaozn.alphatrader.strategy.config.StrategyRegistry;
 import org.slf4j.Logger;
@@ -52,10 +51,11 @@ import java.util.List;
  *
  * <p><b>What is configured here and what is not.</b> Only the backtest-specific parts: the stored
  * bars, the range, the simulated costs, the precision rules and the report destination. Starting
- * equity is {@code alpha.initial-cash} and strategies are {@code alpha.strategies} - the same knobs
+ * equity is {@code alpha.initial-cash}, strategies are {@code alpha.strategies} and the risk rule set
+ * is {@code alpha.risk.*} mapped by {@link RiskPipelines} - the same knobs, and the same mapping,
  * paper and live read. That is FR-BT-06 from the configuration side: if a backtest could be given a
- * different book or a different strategy set than the live system, its result would stop being
- * evidence about live trading.
+ * different book, a different strategy set or a more forgiving gate than the live system, its result
+ * would stop being evidence about live trading.
  *
  * <p>The report directory holds the artifacts of the latest run: the HTML is overwritten, and so is
  * the event journal when one is enabled, because {@link JsonlEventJournal} appends and two runs
@@ -118,8 +118,11 @@ public class BacktestWiring implements ApplicationRunner {
         KlineRepository repository = DataPlan.store(backtest.data());
         List<Series> series = DataPlan.series(backtest.series(), strategies);
         return new BacktestRunner.Config(repository, series, from, to, properties.initialCash(),
-                rules, strategies, policy(properties.risk().sizing()), RiskPipeline.empty(), costModel(backtest),
-                quiescenceTimeout(backtest), journal(backtest, directory));
+                rules, strategies, policy(properties.risk().sizing()),
+                // Deferred: the circuit breaker is built against the run's book, which the runner
+                // creates from initialCash so two runs off this wiring cannot share an account.
+                book -> RiskPipelines.of(properties.risk(), book),
+                costModel(backtest), quiescenceTimeout(backtest), journal(backtest, directory));
     }
 
     /**

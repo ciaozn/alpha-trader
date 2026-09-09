@@ -49,7 +49,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * re-measure itself and every threshold below would drift with the market.
  * {@code BacktestSmokeFixtureTest} regenerates it and asserts that regenerating it changes nothing.
  *
- * <p>The measured baseline is a <em>loss</em>: -4.6% over the window with a 5.5% maximum
+ * <p>The measured baseline is a <em>loss</em>: -4.1% over the window with a 5.0% maximum
  * drawdown. A green smoke test therefore says the pipeline is unchanged, and nothing at all about
  * whether the shipped strategy is worth running - that question belongs to the operator reading the
  * report, not to CI.
@@ -179,23 +179,31 @@ class BacktestSmokeTest {
 
         // The strategy loses money on this window. That is not a defect and not a verdict on MA
         // cross: it is 100 days of hourly bars traded with taker fees, slippage and funding, and a
-        // 26% win rate is what a trend follower looks like on a window that mostly chopped. What is
+        // 28% win rate is what a trend follower looks like on a window that mostly chopped. What is
         // being pinned is that the pipeline still produces exactly these numbers - a change to the
-        // fill price, the cost model, the indicator windows or the sizing moves them, and whoever
-        // moves them has to come here and say why.
-        assertThat(metrics.totalReturn()).isEqualTo(new BigDecimal("-0.04561396"));
-        assertThat(metrics.maxDrawdown()).isEqualTo(new BigDecimal("0.05452565"));
-        assertThat(metrics.finalEquity()).isEqualTo(new BigDecimal("9543.86042895"));
-        assertThat(metrics.totalFees()).isEqualTo(new BigDecimal("119.16422793"));
-        assertThat(report.fundingTotal()).isEqualTo(new BigDecimal("3.79529312"));
+        // fill price, the cost model, the indicator windows, the sizing or the risk rules moves them,
+        // and whoever moves them has to come here and say why.
+        //
+        // T308 moved them, by putting the five-level pipeline into the shipped configuration: the
+        // circuit breaker's pauses took six round trips out of this window (123 fills -> 117) and all
+        // six would have been losses (wins unchanged at 32, losses 90 -> 84), so the return improved
+        // from -4.56% to -4.07% and the drawdown from 5.45% to 4.97%. That attribution was measured,
+        // not assumed: with alpha.risk.breaker.enabled=false every number below returns exactly to
+        // its previous golden, which also says the other four levels never fire on this dataset -
+        // a 10% target exposure keeps the account an order of magnitude inside every cap.
+        assertThat(metrics.totalReturn()).isEqualTo(new BigDecimal("-0.04074802"));
+        assertThat(metrics.maxDrawdown()).isEqualTo(new BigDecimal("0.04971699"));
+        assertThat(metrics.finalEquity()).isEqualTo(new BigDecimal("9592.51978109"));
+        assertThat(metrics.totalFees()).isEqualTo(new BigDecimal("113.74431774"));
+        assertThat(report.fundingTotal()).isEqualTo(new BigDecimal("4.22503117"));
 
-        // Counts are the most legible signal that behaviour moved: 123 fills close 122 round trips
+        // Counts are the most legible signal that behaviour moved: 117 fills close 116 round trips
         // and leave one position open at the end of the data, of which 32 were wins.
-        assertThat(report.fills()).hasSize(123);
-        assertThat(metrics.closedTrades()).isEqualTo(122);
+        assertThat(report.fills()).hasSize(117);
+        assertThat(metrics.closedTrades()).isEqualTo(116);
         assertThat(metrics.openTrades()).isEqualTo(1);
         assertThat(metrics.wins()).isEqualTo(32);
-        assertThat(metrics.losses()).isEqualTo(90);
+        assertThat(metrics.losses()).isEqualTo(84);
     }
 
     @Test

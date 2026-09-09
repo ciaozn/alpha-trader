@@ -15,6 +15,7 @@ import com.ciaozn.alphatrader.common.model.TradingRulesProvider;
 import com.ciaozn.alphatrader.common.portfolio.Portfolio;
 import com.ciaozn.alphatrader.common.time.VirtualClock;
 import com.ciaozn.alphatrader.engine.EventEngine;
+import com.ciaozn.alphatrader.engine.EventHandler;
 import com.ciaozn.alphatrader.engine.EventJournal;
 import com.ciaozn.alphatrader.risk.PositionSizer;
 import com.ciaozn.alphatrader.risk.RiskGate;
@@ -27,6 +28,7 @@ import org.slf4j.LoggerFactory;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
+import java.util.stream.Stream;
 
 /**
  * Assembles and runs one complete backtest in plain Java (FR-BT-06): data store, virtual clock,
@@ -40,13 +42,20 @@ import java.util.List;
  * class wires rather than implements: the moment a backtest needed its own strategy dispatch or its
  * own position sizing, a result measured here would stop being evidence about live trading.
  *
- * <p><b>The three wiring rules that the code below cannot show.</b>
+ * <p><b>The four wiring rules that the code below cannot show.</b>
  * <ul>
  *   <li>{@link SimulatedExecutor} is registered before {@link StrategyEngine} because both consume
  *       {@code KlineEvent} and registration order is dispatch order. The executor has to see a bar
  *       first: it fills the previous bar's order at this bar's open and settles funding, and only
  *       then may strategies reason about this bar. Reversed, a strategy would decide against a
  *       position the exchange has already changed - not a look-ahead leak, but just as wrong.</li>
+ *   <li>A rule from the pipeline that watches the bus is registered on it, between the gate and the
+ *       strategy engine. The gate consults its rules but never forwards events to them, so without
+ *       this the circuit breaker would be consulted, look configured, and never learn about a fill -
+ *       losing its consecutive-loss trigger entirely. Its position in the list is for readability, not
+ *       correctness: the engine runs the whole handler loop before it drains the cascade, so a signal
+ *       a strategy emits in reaction to a {@code FillEvent} is dispatched after every handler, the
+ *       breaker included, has already seen that fill.</li>
  *   <li>{@link EquityRecorder} is handed to the feeder as a {@code RoundListener} and is
  *       <em>not</em> registered as a handler. "This bar's signal -&gt; risk -&gt; order -&gt; fill
  *       cascade has closed" cannot be expressed by handler order; a sampler relying on being
@@ -74,9 +83,11 @@ public final class BacktestRunner {
     /**
      * Everything one run needs. The convenience constructor fills in the five inputs that have an
      * obviously correct default; the canonical one exists so a caller - alpha-app reading yml, a
-     * cost-sensitivity sweep - can override any of them. An empty pipeline means "no rules beyond
-     * sizing", which is <em>not</em> what a shipped configuration should use: the backtest is only
-     * evidence about live trading if both run the same rules (FR-BT-06).
+     * cost-sensitivity sweep - can override any of them. The pipeline is a {@link RiskPipelineFactory}
+     * rather than a {@link RiskPipeline} because the circuit breaker is built against the run's book,
+     * which does not exist yet; {@code RiskPipelineFactory.fixed(RiskPipeline.empty())} means "no rules
+     * beyond sizing", which is <em>not</em> what a shipped configuration should use: the backtest is
+     * only evidence about live trading if both run the same rules (FR-BT-06).
      *
      * <p>Three configurations are refused rather than replayed, all because each would produce a
      * report that looks like a result: no strategies, a non-positive account, and a symbol a
@@ -93,7 +104,7 @@ public final class BacktestRunner {
             TradingRulesProvider tradingRules,
             List<Strategy> strategies,
             PositionSizer.Policy sizerPolicy,
-            RiskPipeline riskPipeline,
+            RiskPipelineFactory riskPipelineFactory,
             SimulatedExecutor.CostModel costModel,
             Duration quiescenceTimeout,
             EventJournal journal) {
@@ -130,7 +141,8 @@ public final class BacktestRunner {
                       BigDecimal startingEquity, TradingRulesProvider tradingRules,
                       List<Strategy> strategies) {
             this(repository, series, fromOpenTime, toOpenTime, startingEquity, tradingRules, strategies,
-                    PositionSizer.Policy.DEFAULT, RiskPipeline.empty(), SimulatedExecutor.CostModel.DEFAULT,
+                    PositionSizer.Policy.DEFAULT, RiskPipelineFactory.fixed(RiskPipeline.empty()),
+                    SimulatedExecutor.CostModel.DEFAULT,
                     EventEngine.DEFAULT_QUIESCENCE_TIMEOUT, EventJournal.noop());
         }
     }
@@ -152,8 +164,9 @@ public final class BacktestRunner {
 
         SimulatedExecutor executor = new SimulatedExecutor(
                 portfolio, config.tradingRules(), config.costModel());
+        RiskPipeline pipeline = config.riskPipelineFactory().create(portfolio);
         RiskGate riskGate = new RiskGate(portfolio, new PositionSizer(config.sizerPolicy()),
-                config.tradingRules(), config.riskPipeline(), clock);
+                config.tradingRules(), pipeline, clock);
         TradeTracker tradeTracker = new TradeTracker(portfolio);
         StrategyEngine strategyEngine = new StrategyEngine(config.strategies(), portfolio, clock);
         EquityRecorder equityRecorder = new EquityRecorder(portfolio);
@@ -163,6 +176,7 @@ public final class BacktestRunner {
 
         engine.registerHandler(executor);
         engine.registerHandler(riskGate);
+        registerRuleObservers(engine, pipeline);
         engine.registerHandler(tradeTracker);
         engine.registerHandler(strategyEngine);
 
@@ -197,6 +211,20 @@ public final class BacktestRunner {
         return new BacktestReport(replay, config.series(), metrics, equityRecorder.curve(),
                 tradeTracker.trades(), executor.fills(), executor.funding(), executor.rejections(),
                 executor.pendingOrders(), portfolio.openPositions(), executor.costModel());
+    }
+
+    /**
+     * Puts every rule that watches the bus on the bus. The gate consults its rules but never forwards
+     * events to them, so a stateful rule left off the engine would still be consulted, still look
+     * configured, and quietly lose the one trigger it needs the bus for - the circuit breaker's
+     * consecutive-loss count, which it recovers from {@code FillEvent}s. Both stages are swept so an
+     * order-stage rule that one day needs the bus is not silently left off it.
+     */
+    private static void registerRuleObservers(EventEngine engine, RiskPipeline pipeline) {
+        Stream.concat(pipeline.signalRules().stream(), pipeline.orderRules().stream())
+                .filter(EventHandler.class::isInstance)
+                .map(EventHandler.class::cast)
+                .forEach(engine::registerHandler);
     }
 
     /**

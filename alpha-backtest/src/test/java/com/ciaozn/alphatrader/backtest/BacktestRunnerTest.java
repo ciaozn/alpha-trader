@@ -7,6 +7,8 @@ import com.ciaozn.alphatrader.backtest.report.BacktestReport;
 import com.ciaozn.alphatrader.backtest.report.HtmlReportRenderer;
 import com.ciaozn.alphatrader.backtest.report.PerformanceAnalyzer;
 import com.ciaozn.alphatrader.common.data.KlineRepository;
+import com.ciaozn.alphatrader.common.event.Event;
+import com.ciaozn.alphatrader.common.event.FillEvent;
 import com.ciaozn.alphatrader.common.event.KlineEvent;
 import com.ciaozn.alphatrader.common.model.Direction;
 import com.ciaozn.alphatrader.common.model.FixedTradingRulesProvider;
@@ -16,6 +18,18 @@ import com.ciaozn.alphatrader.common.model.Money;
 import com.ciaozn.alphatrader.common.model.Symbol;
 import com.ciaozn.alphatrader.common.model.TradingRules;
 import com.ciaozn.alphatrader.common.model.TradingRulesProvider;
+import com.ciaozn.alphatrader.engine.EventEngine;
+import com.ciaozn.alphatrader.engine.EventHandler;
+import com.ciaozn.alphatrader.engine.EventJournal;
+import com.ciaozn.alphatrader.engine.EventPublisher;
+import com.ciaozn.alphatrader.risk.OrderFacts;
+import com.ciaozn.alphatrader.risk.OrderRule;
+import com.ciaozn.alphatrader.risk.PositionSizer;
+import com.ciaozn.alphatrader.risk.RiskPipeline;
+import com.ciaozn.alphatrader.risk.RiskRejection;
+import com.ciaozn.alphatrader.risk.RiskRule;
+import com.ciaozn.alphatrader.risk.SignalFacts;
+import com.ciaozn.alphatrader.risk.SignalRule;
 import com.ciaozn.alphatrader.strategy.Strategy;
 import com.ciaozn.alphatrader.strategy.StrategyContext;
 import org.junit.jupiter.api.Test;
@@ -29,6 +43,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -103,6 +118,37 @@ class BacktestRunnerTest {
         assertThat(fill.fillBarOpenTime()).isNotEqualTo(T0);
         assertThat(fill.slippageBps()).isGreaterThan(SimulatedExecutor.CostModel.DEFAULT.fixedSlippageBps());
         assertThat(fill.fillPrice()).isGreaterThan(fill.barOpen());
+    }
+
+    /**
+     * The fourth wiring rule, and the one whose absence is quietest. The gate <em>consults</em> its
+     * rules but never forwards events to them, so a rule that also watches the bus - the shape
+     * {@code CircuitBreaker} has, recovering its consecutive-loss count from {@code FillEvent}s - has to
+     * be registered separately. Left off the engine it is still consulted on every signal, still looks
+     * configured in the log and in the pipeline, and simply never learns that anything filled: the
+     * breaker's losing-streak trigger goes dark while the daily-loss one keeps working, so the failure
+     * is a rule that fires less often, not a rule that errors.
+     */
+    @Test
+    void aRuleThatWatchesTheBusIsRegisteredOnIt() {
+        WatchingRule signalStage = new WatchingRule("signal-watcher");
+        WatchingRule orderStage = new WatchingRule("order-watcher");
+        BacktestReport report = new BacktestRunner(new BacktestRunner.Config(store(),
+                List.of(new Series(BTC, Interval.H1)), T0, T0 + (BARS - 1) * HOUR, EQUITY, rules(),
+                List.of(new EnterWhenFlat(BTC)), PositionSizer.Policy.DEFAULT,
+                RiskPipelineFactory.fixed(new RiskPipeline(List.of(signalStage), List.of(orderStage))),
+                SimulatedExecutor.CostModel.DEFAULT, EventEngine.DEFAULT_QUIESCENCE_TIMEOUT,
+                EventJournal.noop())).run();
+
+        assertThat(report.fills()).hasSize(1);
+        // Both stages, not just the one the shipped breaker happens to sit in: sweeping one would leave
+        // an order-stage rule that one day needs the bus silently off it.
+        assertThat(signalStage.seen).as("what reached the signal-stage rule").contains(FillEvent.class);
+        assertThat(orderStage.seen).as("what reached the order-stage rule").contains(FillEvent.class);
+        // Registering them must not replace the pipeline's own use of them: one signal, one order, so
+        // one consultation of each stage.
+        assertThat(signalStage.consultations).isEqualTo(1);
+        assertThat(orderStage.consultations).isEqualTo(1);
     }
 
     @Test
@@ -277,6 +323,51 @@ class BacktestRunnerTest {
         return Thread.getAllStackTraces().keySet().stream()
                 .filter(thread -> "event-engine".equals(thread.getName()))
                 .count();
+    }
+
+    /**
+     * A rule that also watches the bus - the shape {@code CircuitBreaker} has. It objects to nothing,
+     * so the run it is wired into trades exactly as it would with an empty pipeline, and the only thing
+     * it reports is what reached it and by which of its two roles. It implements both stage interfaces
+     * (their {@code check} methods take different facts, so one class can hold both) so the same double
+     * can be put in either stage.
+     */
+    private static final class WatchingRule implements SignalRule, OrderRule, EventHandler {
+
+        private final String id;
+        private final List<Class<?>> seen = new ArrayList<>();
+        private int consultations;
+
+        WatchingRule(String id) {
+            this.id = id;
+        }
+
+        @Override
+        public String ruleId() {
+            return id;
+        }
+
+        @Override
+        public RiskRule.Level level() {
+            return RiskRule.Level.CIRCUIT_BREAKER;
+        }
+
+        @Override
+        public Optional<RiskRejection> check(SignalFacts facts) {
+            consultations++;
+            return Optional.empty();
+        }
+
+        @Override
+        public Optional<RiskRejection> check(OrderFacts facts) {
+            consultations++;
+            return Optional.empty();
+        }
+
+        @Override
+        public void onEvent(Event event, EventPublisher publisher) {
+            seen.add(event.getClass());
+        }
     }
 
     /** Long whenever the book is flat, so exactly one order survives a correctly ordered run. */
