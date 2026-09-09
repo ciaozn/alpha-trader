@@ -19,7 +19,8 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * T312: the order state machine, exercised over every path through it (FR-EX-01).
+ * T312/T313: the order state machine and its intake, exercised over every path through it (FR-EX-01,
+ * FR-EX-02).
  *
  * <p>The exhaustive test at the bottom is the one that carries the acceptance criterion 非法迁移一律
  * 拒绝. It states the machine independently of the production table - as a predicate over "where the
@@ -27,11 +28,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  * rather than making the test agree with itself. Everything above it is a named path a reader would
  * look for: what each report does to the row, what the row's numbers become, and what a refusal costs.
  *
- * <p>Two assertions here are about <b>order</b> rather than content, and both are the kind of thing
- * that passes by accident if nobody writes it down. The row is written before the migration is
- * announced, which is checked by reading the store from inside the publisher; and a redelivered
- * request changes nothing, which is the storage half of FR-EX-02 and the half that is easy to lose
- * when the send half lands in T313.
+ * <p>Three assertions here are about <b>order</b> rather than content, and all three are the kind of
+ * thing that passes by accident if nobody writes it down. The row is written before the migration is
+ * announced, which is checked by reading the store from inside the publisher. The row exists before the
+ * order is handed over for sending, which is the same store read from inside the outbox - a crash the
+ * other way round leaves an order on the exchange this process has no record of. And a redelivered
+ * request neither moves the row nor reaches the outbox, which is FR-EX-02's two halves.
+ *
+ * <p>The outbox here records rather than sends. What a hand-over does once it leaves the engine thread
+ * is {@code OrderSenderTest}'s subject, and mixing the two would make a gateway failure look like a
+ * state-machine failure.
  */
 class OrderManagerTest {
 
@@ -46,14 +52,38 @@ class OrderManagerTest {
     private static final BigDecimal PRICE = new BigDecimal("100");
     private static final BigDecimal FEE = new BigDecimal("0.05");
 
-    private record Harness(OrderManager oms, InMemoryOrderStore store, List<Event> published) {
+    private record Harness(OrderManager oms, InMemoryOrderStore store, List<Event> published,
+                           RecordingOutbox outbox) {
+    }
+
+    /** Records the hand-over instead of performing it. Always accepts, so refusal is never confused
+     *  with the OMS not asking. */
+    private static final class RecordingOutbox implements OrderOutbox {
+
+        private final List<OrderRequestEvent> handed = new ArrayList<>();
+
+        @Override
+        public boolean submit(OrderRequestEvent request) {
+            handed.add(request);
+            return true;
+        }
     }
 
     private Harness harness() {
+        return harness(request());
+    }
+
+    /**
+     * @param request the event intake is given. Passed in rather than built here so a test can assert
+     *                that this very object is what reached the outbox: {@code request()} mints a fresh
+     *                {@code eventId} on every call, so two calls are never equal.
+     */
+    private Harness harness(OrderRequestEvent request) {
         InMemoryOrderStore store = new InMemoryOrderStore();
         List<Event> published = new ArrayList<>();
-        Harness harness = new Harness(new OrderManager(store), store, published);
-        harness.oms().onEvent(request(), published::add);
+        RecordingOutbox outbox = new RecordingOutbox();
+        Harness harness = new Harness(new OrderManager(store, outbox), store, published, outbox);
+        harness.oms().onEvent(request, published::add);
         return harness;
     }
 
@@ -260,7 +290,7 @@ class OrderManagerTest {
         InMemoryOrderStore store = new InMemoryOrderStore();
         List<Event> published = new ArrayList<>();
         List<OrderStatus> statusSeenByThePublisher = new ArrayList<>();
-        OrderManager oms = new OrderManager(store);
+        OrderManager oms = new OrderManager(store, request -> true);
 
         // The publisher reads the store rather than trusting the event: if an announcement went out
         // first, this would find no row at all on the open, and would see NEW while the event said
@@ -281,18 +311,58 @@ class OrderManagerTest {
     }
 
     @Test
+    void theRowExistsBeforeTheOrderIsHandedOverForSending() {
+        InMemoryOrderStore store = new InMemoryOrderStore();
+        List<Event> published = new ArrayList<>();
+        List<OrderStatus> statusAtHandOver = new ArrayList<>();
+        OrderManager oms = new OrderManager(store, request -> {
+            statusAtHandOver.add(store.find(request.clientOrderId()).orElseThrow().status());
+            return true;
+        });
+
+        oms.onEvent(request(), published::add);
+
+        // A crash between the two leaves an unsent row that reconciliation finds. The other way round
+        // leaves an order resting on the exchange that this process has no record of, which is FR-EX-04's
+        // ghost and the one that can cost money.
+        assertThat(statusAtHandOver).containsExactly(OrderStatus.NEW);
+        assertThat(updates(published)).hasSize(1);
+    }
+
+    @Test
+    void anOrderIsHandedOverOnceAndOnlyByIntake() {
+        OrderRequestEvent order = request();
+        Harness harness = harness(order);
+        assertThat(harness.outbox().handed).containsExactly(order);
+
+        // Reports move the row; only intake sends. Handing over again on the ack would place the same
+        // clientOrderId twice, and the exchange would answer the second one with a rejection for an
+        // order that is live - indistinguishable from a genuine refusal.
+        harness.oms().onEvent(Attempt.ACK.report(T0 + 1), harness.published()::add);
+        harness.oms().onEvent(Attempt.PARTIAL_TRADE.report(T0 + 2), harness.published()::add);
+        harness.oms().onEvent(Attempt.CANCEL.report(T0 + 3), harness.published()::add);
+
+        assertThat(harness.outbox().handed).containsExactly(order);
+    }
+
+    @Test
     void aRedeliveredOrderRequestLeavesTheRowExactlyAsItWas() {
-        Harness harness = harness();
+        OrderRequestEvent order = request();
+        Harness harness = harness(order);
         harness.oms().onEvent(Attempt.PARTIAL_TRADE.report(T0 + 1), harness.published()::add);
         OrderRecord traded = row(harness);
         harness.published().clear();
 
-        // A replayed journal, or a strategy that reused a clientOrderId. Overwriting the row would
-        // reset filledQty to zero on an order that has already traded.
+        // A replayed journal rebuilds every event with a fresh eventId, so this is a different object
+        // carrying the same clientOrderId - the key FR-EX-02 is written against. Overwriting the row
+        // would reset filledQty to zero on an order that has already traded.
         harness.oms().onEvent(request(), harness.published()::add);
 
         assertThat(row(harness)).isEqualTo(traded);
         assertThat(harness.published()).isEmpty();
+        // The send half of FR-EX-02. The outbox keeps its own set of handed-over ids as a last line,
+        // but returning here is what stops a replayed request from ever reaching it.
+        assertThat(harness.outbox().handed).containsExactly(order);
     }
 
     // ------------------------------------------------------------------ refusals

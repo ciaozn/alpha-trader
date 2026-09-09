@@ -38,12 +38,18 @@ import java.util.Set;
  * would be unchanged and nothing downstream would know. So the OMS leaves the row alone, publishes
  * nothing about the order, and says so on the alert channel the rest of the system already uses.
  *
- * <p><b>Not here yet, by task boundary rather than by oversight.</b> The send path - calling
- * {@code placeOrder}, and telling "the exchange refused this order" from "the exchange could not be
- * reached" so that the second is never recorded as a failure - is T313, and it is why this class
- * holds no gateway and no clock. Writing the fill into {@code Portfolio} before publishing a
- * {@code FillEvent}, and storing the fill itself, is T314; until then a trade report moves the order
- * row and nothing else, which leaves the omission structural rather than a comment.
+ * <p><b>The send happens after the row is written, and on another thread.</b> {@code placeOrder} is a
+ * blocking REST call and {@code EventHandler} forbids network IO here, so the OMS hands the order to an
+ * {@link OrderOutbox} and {@code OrderSender} makes the call on its own thread, publishing whatever the
+ * exchange says back as an {@link OrderReportEvent}. That the row exists first is what makes the answer
+ * findable when it arrives; that the hand-over comes last is what keeps a crash between the two on the
+ * safe side - an unsent row rather than a sent order nobody recorded. This class holds no gateway and
+ * no clock, and never learns whether the exchange answered.
+ *
+ * <p><b>Not here yet, by task boundary rather than by oversight.</b> Writing the fill into
+ * {@code Portfolio} before publishing a {@code FillEvent}, and storing the fill itself, is T314; until
+ * then a trade report moves the order row and nothing else, which leaves the omission structural rather
+ * than a comment.
  *
  * <p>Runs on the event-engine thread only, like every handler, so the store it writes needs no
  * locking. Exchange reports reach it as events rather than as calls from a socket thread for the same
@@ -62,9 +68,11 @@ public final class OrderManager implements EventHandler {
     private static final Map<OrderStatus, Set<OrderStatus>> LEGAL = legalTransitions();
 
     private final OrderStore store;
+    private final OrderOutbox outbox;
 
-    public OrderManager(OrderStore store) {
+    public OrderManager(OrderStore store, OrderOutbox outbox) {
         this.store = store;
+        this.outbox = outbox;
     }
 
     @Override
@@ -90,9 +98,9 @@ public final class OrderManager implements EventHandler {
     private void open(OrderRequestEvent request, EventPublisher publisher) {
         if (store.find(request.clientOrderId()).isPresent()) {
             // NEW -> NEW is not in the table, and saving anyway would reset filledQty on an order that
-            // has already traded. This is the storage half of FR-EX-02's idempotency; the half that
-            // matters for money - never handing the same clientOrderId to the exchange twice - is
-            // T313's, and it belongs with the send path it guards.
+            // has already traded. This is the storage half of FR-EX-02's idempotency; the send half is
+            // the sender's own set of handed-over ids, and returning here is what keeps a redelivered
+            // request from ever reaching it.
             log.warn("Ignoring a redelivered order request [{}]", request.clientOrderId());
             return;
         }
@@ -101,6 +109,9 @@ public final class OrderManager implements EventHandler {
         publisher.publish(announcement(row));
         log.debug("Order {} opened: {} {} {} qty={}", row.clientOrderId(), row.symbol().unified(),
                 row.side(), row.orderType(), row.qty().toPlainString());
+        // Last, and off this thread: the row has to exist before anything can answer about it, and the
+        // answer arrives as an event in a later round whichever way the send goes.
+        outbox.submit(request);
     }
 
     private void onReport(OrderReportEvent report, EventPublisher publisher) {
