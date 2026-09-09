@@ -17,6 +17,10 @@
     <dependencies>
         <dependency>
             <groupId>com.ciaozn.alphatrader</groupId>
+            <artifactId>alpha-engine</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.ciaozn.alphatrader</groupId>
             <artifactId>alpha-strategy</artifactId>
         </dependency>
         <dependency>
