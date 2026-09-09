@@ -12,6 +12,7 @@ import com.ciaozn.alphatrader.common.model.OrderStatus;
 import com.ciaozn.alphatrader.common.model.OrderType;
 import com.ciaozn.alphatrader.common.model.Side;
 import com.ciaozn.alphatrader.common.model.Symbol;
+import com.ciaozn.alphatrader.common.portfolio.Portfolio;
 import com.ciaozn.alphatrader.common.time.VirtualClock;
 import com.ciaozn.alphatrader.engine.EventEngine;
 import com.ciaozn.alphatrader.engine.EventHandler;
@@ -63,6 +64,8 @@ class OrderSenderTest {
     private static final String OTHER_ID = "ma-cross-btc-1700000000000-2";
     private static final String EXCHANGE_ID = "2639485123";
     private static final BigDecimal QTY = new BigDecimal("3");
+    /** Only has to be large enough that the OMS's book never runs out mid-test. */
+    private static final BigDecimal EQUITY = new BigDecimal("10000");
     private static final long T0 = 1_700_000_000_000L;
 
     /** Generous, because these tests fail by timing out and a flaky build costs more than a slow one. */
@@ -376,7 +379,8 @@ class OrderSenderTest {
         return idle(new StubGateway(placement));
     }
 
-    private record Running(OrderSender sender, EventEngine engine, Collector collector) {
+    private record Running(OrderSender sender, EventEngine engine, Collector collector,
+                           Portfolio portfolio) {
     }
 
     private Running running(StubGateway gateway) {
@@ -385,21 +389,24 @@ class OrderSenderTest {
 
     /**
      * A started engine with a started sender publishing into it. When {@code store} is given the OMS is
-     * registered too, and the sender is its outbox, so the loop is closed end to end.
+     * registered too, and the sender is its outbox, so the loop is closed end to end. The book comes with
+     * it because the OMS writes it on a trade report (取舍 16); with no OMS there is nothing to write one.
      */
     private Running running(StubGateway gateway, OrderStore store) {
         Collector collector = new Collector();
         EventEngine engine = new EventEngine(EventJournal.noop(), clock);
         OrderSender sender = new OrderSender(gateway, engine, clock);
+        Portfolio portfolio = null;
         if (store != null) {
-            engine.registerHandler(new OrderManager(store, sender));
+            portfolio = new Portfolio(EQUITY);
+            engine.registerHandler(new OrderManager(store, sender, portfolio));
         }
         engine.registerHandler(collector);
         engine.start();
         toClose.add(engine);
         sender.start();
         toClose.add(sender);
-        return new Running(sender, engine, collector);
+        return new Running(sender, engine, collector, portfolio);
     }
 
     /** Records what the engine dispatched. Read from the test thread, written on the engine's. */
