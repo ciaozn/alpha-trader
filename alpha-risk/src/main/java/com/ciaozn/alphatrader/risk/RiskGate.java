@@ -37,10 +37,20 @@ import java.util.Optional;
  * late rules need - see {@link RiskRule}.
  *
  * <p>Every path out is an event: an {@link OrderRequestEvent} for the executor/OMS, or a
- * {@link RiskAlertEvent} (FR-RK-08). One {@link SignalFacts} snapshot is taken before step 2 and
- * reused by every later step, so the rules, the sizer and the interception record all describe the
- * same instant - re-reading the book per step would let a mark arriving mid-decision make the alert
- * disagree with the decision it explains.
+ * {@link RiskAlertEvent} (FR-RK-08). <b>A blocked signal is also a row.</b> The gate writes an
+ * {@link InterceptionRecord} before it publishes the alert, for the reason every write-then-announce pair
+ * in this system has: FR-RK-08 requires the refusal to be queryable with the rule that refused and the
+ * account it refused against, and the one consumer that can be relied on to go and look is a consumer
+ * reacting to the alert. It writes the row itself rather than leaving it to an observer on the bus
+ * because {@link SignalFacts} never reaches the bus - it is taken inside one {@code onEvent} call - so no
+ * handler registration order could recover the half of the record that makes it worth keeping.
+ *
+ * <p>One {@link SignalFacts} snapshot is taken before step 1 and reused by every later step, by the alert
+ * and by the record, so all of them describe the same instant - re-reading the book per step would let a
+ * mark arriving mid-decision make the alert disagree with the decision it explains. Taking it before step
+ * 1 rather than step 2 is what lets the hard stop record anything at all: it refuses for want of cached
+ * precision, which says nothing about the account, and a refusal with no account behind it cannot answer
+ * "was that right?".
  *
  * <p>Runs on the event-engine thread only, so the counters need no synchronization. Orders go out as
  * MARKET: the backtest matcher fills at the next bar's open and the live OMS at the touch, so a limit
@@ -57,17 +67,25 @@ public final class RiskGate implements EventHandler {
     private final TradingRulesProvider tradingRules;
     private final RiskPipeline pipeline;
     private final Clock clock;
+    private final RecordStore records;
     private long sequence;
     private long ordersPassed;
     private long signalsBlocked;
 
+    /**
+     * @param records where refusals are written. Required in all three modes rather than optional: a
+     *                nullable store would give the block path two shapes and only one of them would be
+     *                tested. A mode that runs without a business database is given
+     *                {@link InMemoryRecordStore}, which is what that class exists for.
+     */
     public RiskGate(Portfolio portfolio, PositionSizer sizer, TradingRulesProvider tradingRules,
-                    RiskPipeline pipeline, Clock clock) {
+                    RiskPipeline pipeline, Clock clock, RecordStore records) {
         this.portfolio = portfolio;
         this.sizer = sizer;
         this.tradingRules = tradingRules;
         this.pipeline = pipeline;
         this.clock = clock;
+        this.records = records;
     }
 
     @Override
@@ -78,18 +96,21 @@ public final class RiskGate implements EventHandler {
     }
 
     private void onSignal(SignalEvent signal, EventPublisher publisher) {
+        // First, before anything is checked: it needs no trading rules, both book reads are pure, and
+        // taking it here is what lets the hard stop below record the account it refused against.
+        SignalFacts facts = SignalFacts.of(signal, portfolio, clock.nowMillis());
+
         Optional<TradingRules> rules = tradingRules.find(signal.symbol());
         if (rules.isEmpty()) {
-            block(publisher, signal, new RiskRejection(RULE_MISSING_TRADING_RULES, RiskRule.Level.SIZING,
+            block(publisher, facts, new RiskRejection(RULE_MISSING_TRADING_RULES, RiskRule.Level.SIZING,
                     RiskAlertEvent.Severity.CRITICAL,
                     "no trading rules cached for " + signal.symbol().unified() + ", cannot align precision"));
             return;
         }
 
-        SignalFacts facts = SignalFacts.of(signal, portfolio, clock.nowMillis());
         Optional<RiskRejection> beforeSizing = pipeline.checkSignal(facts);
         if (beforeSizing.isPresent()) {
-            block(publisher, signal, beforeSizing.get());
+            block(publisher, facts, beforeSizing.get());
             return;
         }
 
@@ -98,20 +119,19 @@ public final class RiskGate implements EventHandler {
         switch (result) {
             case PositionSizer.Result.NoTrade ignored -> log.debug("Signal {} {} {} needs no trade",
                     signal.strategyId(), signal.symbol().unified(), signal.direction());
-            case PositionSizer.Result.Order order -> onOrder(signal, facts, order, publisher);
-            case PositionSizer.Result.Rejected rejected -> block(publisher, signal, new RiskRejection(
+            case PositionSizer.Result.Order order -> onOrder(facts, order, publisher);
+            case PositionSizer.Result.Rejected rejected -> block(publisher, facts, new RiskRejection(
                     rejected.ruleId(), RiskRule.Level.SIZING, rejected.severity(), rejected.detail()));
         }
     }
 
-    private void onOrder(SignalEvent signal, SignalFacts facts, PositionSizer.Result.Order order,
-                         EventPublisher publisher) {
+    private void onOrder(SignalFacts facts, PositionSizer.Result.Order order, EventPublisher publisher) {
         Optional<RiskRejection> afterSizing = pipeline.checkOrder(OrderFacts.of(facts, order.side(), order.qty()));
         if (afterSizing.isPresent()) {
-            block(publisher, signal, afterSizing.get());
+            block(publisher, facts, afterSizing.get());
             return;
         }
-        publishOrder(signal, order, publisher);
+        publishOrder(facts.signal(), order, publisher);
     }
 
     private void publishOrder(SignalEvent signal, PositionSizer.Result.Order order, EventPublisher publisher) {
@@ -125,12 +145,27 @@ public final class RiskGate implements EventHandler {
                 order.side(), order.qty().toPlainString(), clientOrderId);
     }
 
-    private void block(EventPublisher publisher, SignalEvent signal, RiskRejection rejection) {
+    /**
+     * The one way out that is not an order: one row, then one alert.
+     *
+     * <p>The row goes first for the reason every write-then-announce pair in this system has - a consumer
+     * that reacts to the alert by querying FR-RK-08's record has to find it already there. The alert is
+     * stamped with the snapshot's instant rather than with a fresh clock read, because in live the clock
+     * is the wall clock and time passes while the pipeline runs: a second read here is what would let the
+     * alert and the record explaining it carry different timestamps, and {@link InterceptionRecord}'s
+     * contract is that its timestamp is the one the snapshot was taken with. One decision, one instant.
+     *
+     * <p>The signal comes out of the facts rather than arriving beside them, so the row and the alert
+     * cannot be built from two different signals even by a caller that has both in scope.
+     */
+    private void block(EventPublisher publisher, SignalFacts facts, RiskRejection rejection) {
         signalsBlocked++;
+        SignalEvent signal = facts.signal();
         String message = "signal " + signal.eventId() + " from " + signal.strategyId() + " "
                 + signal.symbol().unified() + " " + signal.direction() + " blocked: " + rejection.detail();
         log.warn("Risk block [{}] {}", rejection.ruleId(), message);
-        publisher.publish(RiskAlertEvent.of(rejection.ruleId(), rejection.severity(), message, clock.nowMillis()));
+        records.saveInterception(new InterceptionRecord(facts, rejection));
+        publisher.publish(RiskAlertEvent.of(rejection.ruleId(), rejection.severity(), message, facts.nowMillis()));
     }
 
     /** Orders this gate let through. */

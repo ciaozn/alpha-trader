@@ -37,7 +37,7 @@ class RiskGateTest {
 
     private final List<Event> published = new ArrayList<>();
 
-    private record Harness(Portfolio portfolio, VirtualClock clock, RiskGate gate) {
+    private record Harness(Portfolio portfolio, VirtualClock clock, RiskGate gate, InMemoryRecordStore records) {
     }
 
     private Harness harness(String cash, TradingRules... rules) {
@@ -47,13 +47,14 @@ class RiskGateTest {
     private Harness harness(RiskPipeline pipeline, String cash, TradingRules... rules) {
         Portfolio portfolio = new Portfolio(new BigDecimal(cash));
         VirtualClock clock = new VirtualClock(T0);
+        InMemoryRecordStore records = new InMemoryRecordStore();
         // Explicit 0.30 rather than Policy.DEFAULT: this harness tests gate ordering, not exposure
         // arithmetic, and several cases below hand-compute a target of 30 and apply fills of 30 to
         // stand for an already-held position. The default's own value is pinned in PositionSizerTest.
         RiskGate gate = new RiskGate(portfolio,
                 new PositionSizer(new PositionSizer.Policy(new BigDecimal("0.30"))),
-                FixedTradingRulesProvider.of(rules), pipeline, clock);
-        return new Harness(portfolio, clock, gate);
+                FixedTradingRulesProvider.of(rules), pipeline, clock, records);
+        return new Harness(portfolio, clock, gate, records);
     }
 
     private static SignalEvent signal(String strategyId, Symbol symbol, Direction direction, double strength) {
@@ -345,16 +346,63 @@ class RiskGateTest {
     void bothStagesAndTheSizerSeeOneSnapshotOfTheAccount() {
         StubSignalRule early = new StubSignalRule("RK-02-leverage", RiskRule.Level.ACCOUNT, null);
         StubOrderRule late = new StubOrderRule("RK-04-symbol-exposure", RiskRule.Level.PORTFOLIO, null);
-        Harness harness = harness(new RiskPipeline(List.of(early), List.of(late)), "10000", BTC_RULES);
-        harness.portfolio().mark(BTC, new BigDecimal("100"));
+        Portfolio portfolio = new Portfolio(new BigDecimal("10000"));
+        portfolio.mark(BTC, new BigDecimal("100"));
+        InMemoryRecordStore records = new InMemoryRecordStore();
+        // The mover is first because it has to be consulted between the snapshot and the sizing: the book
+        // it moves is the book the sizer would read if the gate re-read it instead of reusing the snapshot.
+        RiskGate gate = new RiskGate(portfolio,
+                new PositionSizer(new PositionSizer.Policy(new BigDecimal("0.30"))),
+                FixedTradingRulesProvider.of(BTC_RULES),
+                new RiskPipeline(List.of(new BookMovingRule(portfolio, BTC, new BigDecimal("200")), early),
+                        List.of(late)),
+                new VirtualClock(T0), records);
 
-        harness.gate().onEvent(signal("ma-cross-btc", BTC, Direction.LONG, 1.0), published::add);
+        gate.onEvent(signal("ma-cross-btc", BTC, Direction.LONG, 1.0), published::add);
 
         assertThat(orders(published)).hasSize(1);
         assertThat(late.seen).hasSize(1);
         // Same object, not merely equal values: a mark landing mid-decision would otherwise let the
         // alert quote an account state that is not the one the decision was made against.
         assertThat(late.seen.getFirst().signal()).isSameAs(early.seen.getFirst());
+        // And the sizer, which the rule above tried to move out from under it: 30% of 10000 at the
+        // snapshot's 100 is 30, where a fresh read at 200 would have sized 15. The quantity is the only
+        // place the sizer's input is observable, so it is what pins the sizer to the same snapshot.
+        assertThat(orders(published).getFirst().qty()).isEqualByComparingTo("30.000");
+    }
+
+    /**
+     * Stands for a mark arriving while the gate is mid-decision, which in live is ordinary. It objects to
+     * nothing: a rule that objected would end the attempt before the sizer ran, and the sized quantity is
+     * the only thing that shows what the sizer was handed.
+     */
+    private static final class BookMovingRule implements SignalRule {
+
+        private final Portfolio portfolio;
+        private final Symbol symbol;
+        private final BigDecimal price;
+
+        BookMovingRule(Portfolio portfolio, Symbol symbol, BigDecimal price) {
+            this.portfolio = portfolio;
+            this.symbol = symbol;
+            this.price = price;
+        }
+
+        @Override
+        public String ruleId() {
+            return "RK-00-book-mover";
+        }
+
+        @Override
+        public RiskRule.Level level() {
+            return RiskRule.Level.ACCOUNT;
+        }
+
+        @Override
+        public Optional<RiskRejection> check(SignalFacts facts) {
+            portfolio.mark(symbol, price);
+            return Optional.empty();
+        }
     }
 
     @Test
@@ -369,5 +417,211 @@ class RiskGateTest {
         assertThat(alerts(published)).hasSize(1);
         assertThat(alerts(published).getFirst().ruleId()).isEqualTo(RiskGate.RULE_MISSING_TRADING_RULES);
         assertThat(alerts(published).getFirst().severity()).isEqualTo(RiskAlertEvent.Severity.CRITICAL);
+    }
+
+    // ------------------------------------------------------- the interception record (FR-RK-08)
+
+    /**
+     * A rule that moves the clock while it is being consulted, which is what a wall clock does in live:
+     * real time passes between the snapshot and the alert. The gate gets one instant per decision, so
+     * both have to carry the snapshot's.
+     */
+    private static final class ClockMovingRule implements SignalRule {
+
+        private final VirtualClock clock;
+        private final long drift;
+        private final RiskRejection verdict;
+
+        ClockMovingRule(VirtualClock clock, long drift, RiskRejection verdict) {
+            this.clock = clock;
+            this.drift = drift;
+            this.verdict = verdict;
+        }
+
+        @Override
+        public String ruleId() {
+            return verdict.ruleId();
+        }
+
+        @Override
+        public RiskRule.Level level() {
+            return verdict.level();
+        }
+
+        @Override
+        public Optional<RiskRejection> check(SignalFacts facts) {
+            clock.advanceTo(clock.nowMillis() + drift);
+            return Optional.of(verdict);
+        }
+    }
+
+    /** The one row this refusal wrote. Every case below refuses exactly once, so exactly one is the point. */
+    private static InterceptionRecord onlyRow(Harness harness) {
+        List<InterceptionRecord> rows = harness.records().interceptions(Long.MIN_VALUE, Long.MAX_VALUE);
+        assertThat(rows).hasSize(1);
+        return rows.getFirst();
+    }
+
+    @Test
+    void theRecordIsWrittenBeforeTheAlertThatAnnouncesIt() {
+        Harness harness = harness("50", BTC_RULES);
+        harness.portfolio().mark(BTC, new BigDecimal("100"));
+        List<Integer> rowsVisibleWhenTheAlertArrived = new ArrayList<>();
+
+        // Read from inside the publisher rather than after the call. Afterwards, both orders look the
+        // same, and it is the order that decides whether a consumer reacting to the alert - which is the
+        // only consumer that can be relied on to go and look - finds the row it is looking for.
+        harness.gate().onEvent(signal("ma-cross-btc", BTC, Direction.LONG, 1.0), event -> {
+            published.add(event);
+            if (event instanceof RiskAlertEvent) {
+                rowsVisibleWhenTheAlertArrived.add(
+                        harness.records().interceptions(PositionSizer.RULE_MIN_NOTIONAL).size());
+            }
+        });
+
+        assertThat(alerts(published)).hasSize(1);
+        assertThat(rowsVisibleWhenTheAlertArrived).containsExactly(1);
+    }
+
+    @Test
+    void aRefusalIsQueryableByTheRuleThatRefusedAndByTheInstantItRefusedAt() {
+        Harness harness = harness("50", BTC_RULES);
+        harness.portfolio().mark(BTC, new BigDecimal("100"));
+
+        harness.gate().onEvent(signal("ma-cross-btc", BTC, Direction.LONG, 1.0), published::add);
+
+        InterceptionRecord record = onlyRow(harness);
+        // FR-RK-08's 按规则查询, and the range query whose ends are both inclusive - so the row at exactly
+        // T0 is inside a window that starts and ends at T0.
+        assertThat(harness.records().interceptions(PositionSizer.RULE_MIN_NOTIONAL)).containsExactly(record);
+        assertThat(harness.records().interceptions(T0, T0)).containsExactly(record);
+        // A rule that did not refuse and a window it did not refuse in both find nothing: "none" is an
+        // empty list, never null and never every row.
+        assertThat(harness.records().interceptions(AccountRule.RULE_ID)).isEmpty();
+        assertThat(harness.records().interceptions(T0 + 1, T0 + 2)).isEmpty();
+    }
+
+    @Test
+    void theAlertAndTheRowCarryTheSameInstantEvenWhenAClockMovesMidDecision() {
+        Portfolio portfolio = new Portfolio(new BigDecimal("10000"));
+        portfolio.mark(BTC, new BigDecimal("100"));
+        VirtualClock clock = new VirtualClock(T0);
+        InMemoryRecordStore records = new InMemoryRecordStore();
+        RiskRejection verdict = rejection("RK-05-daily-loss", RiskRule.Level.CIRCUIT_BREAKER);
+        // Built by hand rather than through the harness because the rule needs the clock the gate reads.
+        RiskGate gate = new RiskGate(portfolio,
+                new PositionSizer(new PositionSizer.Policy(new BigDecimal("0.30"))),
+                FixedTradingRulesProvider.of(BTC_RULES),
+                new RiskPipeline(List.of(new ClockMovingRule(clock, 750, verdict)), List.of()),
+                clock, records);
+
+        gate.onEvent(signal("ma-cross-btc", BTC, Direction.LONG, 1.0), published::add);
+
+        // The rule moved the clock 750ms while it was being consulted, and the snapshot was taken before
+        // the pipeline ran. One decision, one instant: a second clock read inside the block path is what
+        // would stamp the alert 750ms after the row that explains it, and the two would then disagree
+        // about when the refusal happened - which is the pairing every query below relies on.
+        assertThat(clock.nowMillis()).isEqualTo(T0 + 750);
+        RiskAlertEvent alert = alerts(published).getFirst();
+        InterceptionRecord record = records.interceptions("RK-05-daily-loss").getFirst();
+        assertThat(alert.timestamp()).isEqualTo(T0);
+        assertThat(record.timestamp()).isEqualTo(T0);
+        assertThat(record.facts().nowMillis()).isEqualTo(T0);
+    }
+
+    @Test
+    void theHardStopRecordsTheAccountItRefusedAgainst() {
+        Harness harness = harness("10000", BTC_RULES);
+        harness.portfolio().mark(ETH, new BigDecimal("3000"));
+
+        harness.gate().onEvent(signal("ma-cross-eth", ETH, Direction.LONG, 1.0), published::add);
+
+        InterceptionRecord record = onlyRow(harness);
+        assertThat(record.ruleId()).isEqualTo(RiskGate.RULE_MISSING_TRADING_RULES);
+        assertThat(record.rejection().level()).isEqualTo(RiskRule.Level.SIZING);
+        assertThat(record.rejection().severity()).isEqualTo(RiskAlertEvent.Severity.CRITICAL);
+        // The reason the snapshot is taken before step 1 rather than step 2. This refusal is about cached
+        // precision and says nothing about the account, so a gate that snapshotted later would write a
+        // rejection with no facts beside it - and "what did the account look like" is the only question
+        // the row exists to answer.
+        assertThat(record.facts().symbol()).isEqualTo(ETH);
+        assertThat(record.facts().signal().strategyId()).isEqualTo("ma-cross-eth");
+        assertThat(record.facts().equity()).isEqualByComparingTo("10000");
+        assertThat(record.facts().price()).isEqualByComparingTo("3000");
+        assertThat(record.facts().signedQty()).isEqualByComparingTo("0");
+        assertThat(record.timestamp()).isEqualTo(alerts(published).getFirst().timestamp());
+    }
+
+    @Test
+    void aSizingRejectionIsFiledUnderTheStepThatProducedIt() {
+        Harness harness = harness("50", BTC_RULES);
+        harness.portfolio().mark(BTC, new BigDecimal("100"));
+
+        harness.gate().onEvent(signal("ma-cross-btc", BTC, Direction.LONG, 1.0), published::add);
+
+        InterceptionRecord record = onlyRow(harness);
+        // SIZING is FR-RK-07 rather than one of the five policy levels, and the row says so: whoever
+        // queries by level is asking which kind of stop this was, and a sizing refusal filed under a
+        // policy level would send them hunting a threshold that was never crossed.
+        assertThat(record.rejection().level()).isEqualTo(RiskRule.Level.SIZING);
+        assertThat(record.ruleId()).isEqualTo(PositionSizer.RULE_MIN_NOTIONAL);
+        assertThat(record.rejection().severity()).isEqualTo(RiskAlertEvent.Severity.WARNING);
+        // And the account that made it a refusal: 50 of equity at a 30% target cannot reach the 20
+        // minimum notional. That arithmetic is only checkable because the row holds the facts.
+        assertThat(record.facts().equity()).isEqualByComparingTo("50");
+        assertThat(record.facts().price()).isEqualByComparingTo("100");
+    }
+
+    @Test
+    void anUnpricedSymbolIsRecordedWithTheZeroThatMadeItUnsizeable() {
+        Harness harness = harness("10000", BTC_RULES);
+
+        harness.gate().onEvent(signal("ma-cross-btc", BTC, Direction.LONG, 1.0), published::add);
+
+        InterceptionRecord record = onlyRow(harness);
+        assertThat(record.ruleId()).isEqualTo(PositionSizer.RULE_NO_PRICE);
+        assertThat(record.rejection().severity()).isEqualTo(RiskAlertEvent.Severity.CRITICAL);
+        // SignalFacts.price is never null - markOf falls back to the entry price and then to zero - so
+        // the row holds the zero that made this signal unsizeable rather than a hole where the evidence
+        // should be. The alert says "no price"; only the row can show the price the gate actually saw.
+        assertThat(record.facts().price()).isEqualByComparingTo("0");
+        assertThat(record.facts().symbolNotional()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void theRowKeepsTheSnapshotTheRulesWereHandedNotAFreshReadingOfTheBook() {
+        StubSignalRule rule = new StubSignalRule("RK-02-leverage", RiskRule.Level.ACCOUNT,
+                rejection("RK-02-leverage", RiskRule.Level.ACCOUNT));
+        Harness harness = harness(new RiskPipeline(List.of(rule), List.of()), "10000", BTC_RULES);
+        harness.portfolio().applyFill(BTC, Side.BUY, new BigDecimal("100"), new BigDecimal("30"), BigDecimal.ZERO);
+        harness.portfolio().mark(BTC, new BigDecimal("100"));
+
+        harness.gate().onEvent(signal("ma-cross-btc", BTC, Direction.LONG, 1.0), published::add);
+        InterceptionRecord record = onlyRow(harness);
+        assertThat(record.facts().price()).isEqualByComparingTo("100");
+        assertThat(record.facts().symbolNotional()).isEqualByComparingTo("3000");
+
+        // The market moves on and the row must not: it is the account the decision was made against, and
+        // a row re-read afterwards is how an interception record quietly starts defending a decision
+        // nobody made. Same hazard PositionSnapshot's markPrice exists to close, on the other table.
+        harness.portfolio().mark(BTC, new BigDecimal("400"));
+
+        assertThat(record.facts().price()).isEqualByComparingTo("100");
+        assertThat(record.facts().symbolNotional()).isEqualByComparingTo("3000");
+        // Same object, not merely equal values: the row holds what the rule was handed.
+        assertThat(record.facts()).isSameAs(rule.seen.getFirst());
+    }
+
+    @Test
+    void aSignalThatNeedsNoTradeIsNotARefusalAndWritesNoRow() {
+        Harness harness = harness("10000", BTC_RULES);
+        harness.portfolio().mark(BTC, new BigDecimal("100"));
+
+        harness.gate().onEvent(signal("ma-cross-btc", BTC, Direction.FLAT, 1.0), published::add);
+
+        assertThat(published).isEmpty();
+        // Nothing was refused, so nothing is recorded. A row per signal would make the table a copy of
+        // the signal table, and "how many times did risk say no" would stop having an answer.
+        assertThat(harness.records().interceptions(Long.MIN_VALUE, Long.MAX_VALUE)).isEmpty();
     }
 }

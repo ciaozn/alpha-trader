@@ -44,6 +44,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * fragment of the rule's own wording. The wording fragment is the part that identifies the short
  * circuit: {@code RK-02-account} owns both the leverage ceiling (CRITICAL) and the margin floor
  * (WARNING), so id plus severity still leaves two checks, and only the detail says which fired.
+ * And exactly one {@link InterceptionRecord}, because FR-RK-08 is a record requirement as well as an
+ * alert requirement - agreeing with that alert on rule id, level, severity and timestamp, its bare
+ * wording contained in the alert's sentence, and holding the account snapshot the alert structurally
+ * cannot. These are the five real rules rather than stubs, so a row here is evidence the record survives
+ * the wiring and not merely that the gate can be handed one.
  *
  * <p><b>Two rows are honest about reachability rather than contrived to look reachable.</b>
  * <ul>
@@ -100,8 +105,12 @@ class RiskInterceptionMatrixTest {
     private static final int MAX_ORDERS = 10;
     private static final Duration WINDOW = Duration.ofMinutes(1);
 
-    /** What one signal produced: the order it became, or the alert that explains why it did not. */
-    private record Outcome(List<OrderRequestEvent> orders, List<RiskAlertEvent> alerts) {
+    /**
+     * What one signal produced: the order it became, or the alert that explains why it did not plus the
+     * row the gate wrote to back that alert up (FR-RK-08's other half).
+     */
+    private record Outcome(List<OrderRequestEvent> orders, List<RiskAlertEvent> alerts,
+                           List<InterceptionRecord> interceptions) {
     }
 
     /**
@@ -227,6 +236,24 @@ class RiskInterceptionMatrixTest {
         assertThat(alert.detail()).contains(scenario.evidence());
         // FR-RK-08's "当时账户状态" is only actionable if the alert says whose signal was refused.
         assertThat(alert.detail()).contains(STRATEGY);
+
+        // The record half of FR-RK-08, asserted on the real five rules rather than on stubs: the refusal
+        // is queryable, and the row agrees with the alert that announced it on every field they share.
+        assertThat(outcome.interceptions()).as("one row, so the alert and the record cannot be paired off").hasSize(1);
+        InterceptionRecord record = outcome.interceptions().getFirst();
+        assertThat(record.ruleId()).isEqualTo(alert.ruleId());
+        assertThat(record.rejection().level()).isEqualTo(scenario.level());
+        assertThat(record.rejection().severity()).isEqualTo(alert.severity());
+        // The alert wraps the rule's own wording in a sentence naming the signal; the row keeps the
+        // wording bare. Containment is the agreement, and it is the direction that cannot be faked by a
+        // row that made something up.
+        assertThat(alert.detail()).contains(record.rejection().detail());
+        assertThat(record.timestamp()).isEqualTo(alert.timestamp());
+        // What the alert structurally cannot carry, and the whole reason this type exists instead of
+        // persisting the alert: whose signal, and the account the decision was made against.
+        assertThat(record.facts().signal().strategyId()).isEqualTo(STRATEGY);
+        assertThat(record.facts().equity()).isPositive();
+        assertThat(record.facts().price()).isNotNull();
     }
 
     @Test
@@ -286,6 +313,10 @@ class RiskInterceptionMatrixTest {
                 .send(STRATEGY, BTC, Direction.LONG);
 
         assertThat(outcome.alerts()).isEmpty();
+        // And nothing was recorded: an interception row means a refusal, so a gate that wrote one per
+        // signal would turn the table into a copy of the signal table and every row above would still
+        // find exactly one entry in it - the wrong row, but one.
+        assertThat(outcome.interceptions()).isEmpty();
         assertThat(outcome.orders()).hasSize(1);
         OrderRequestEvent order = outcome.orders().getFirst();
         assertThat(order.symbol()).isEqualTo(BTC);
@@ -308,6 +339,7 @@ class RiskInterceptionMatrixTest {
 
         private final Portfolio portfolio = new Portfolio(CASH);
         private final VirtualClock clock = new VirtualClock(T0);
+        private final InMemoryRecordStore records = new InMemoryRecordStore();
         private final CircuitBreaker breaker;
         private final RiskGate gate;
         private long fills;
@@ -322,7 +354,7 @@ class RiskInterceptionMatrixTest {
                             List.of(new OrderLimitsRule(MAX_ORDER_NOTIONAL_FRACTION, MAX_PRICE_DEVIATION),
                                     new PortfolioRule(MAX_TOTAL_NOTIONAL_FRACTION,
                                             MAX_SYMBOL_NOTIONAL_FRACTION))),
-                    clock);
+                    clock, records);
         }
 
         Rig mark(Symbol symbol, String price) {
@@ -353,13 +385,24 @@ class RiskInterceptionMatrixTest {
         /** Runs one signal through the gate and reports only what that signal produced. */
         Outcome send(String strategyId, Symbol symbol, Direction direction) {
             List<Event> published = new ArrayList<>();
+            // The store outlives the call, so "what this signal wrote" is a tail: count the rows before,
+            // take everything after. Insertion order is what makes that a sublist rather than a guess,
+            // and it is one of the four invariants RecordStore's contract states.
+            int alreadyRecorded = everything().size();
             gate.onEvent(SignalEvent.of(strategyId, symbol, direction, 1.0, "matrix", clock.nowMillis()),
                     published::add);
+            List<InterceptionRecord> after = everything();
             return new Outcome(
                     published.stream().filter(OrderRequestEvent.class::isInstance)
                             .map(OrderRequestEvent.class::cast).toList(),
                     published.stream().filter(RiskAlertEvent.class::isInstance)
-                            .map(RiskAlertEvent.class::cast).toList());
+                            .map(RiskAlertEvent.class::cast).toList(),
+                    after.subList(alreadyRecorded, after.size()));
+        }
+
+        /** Every refusal on the store, in the order they were written. Both ends of a range are inclusive. */
+        private List<InterceptionRecord> everything() {
+            return records.interceptions(Long.MIN_VALUE, Long.MAX_VALUE);
         }
     }
 }

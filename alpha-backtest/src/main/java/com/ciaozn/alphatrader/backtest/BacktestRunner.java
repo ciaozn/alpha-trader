@@ -17,6 +17,7 @@ import com.ciaozn.alphatrader.common.time.VirtualClock;
 import com.ciaozn.alphatrader.engine.EventEngine;
 import com.ciaozn.alphatrader.engine.EventHandler;
 import com.ciaozn.alphatrader.engine.EventJournal;
+import com.ciaozn.alphatrader.risk.InMemoryRecordStore;
 import com.ciaozn.alphatrader.risk.PositionSizer;
 import com.ciaozn.alphatrader.risk.RiskGate;
 import com.ciaozn.alphatrader.risk.RiskPipeline;
@@ -165,8 +166,12 @@ public final class BacktestRunner {
         SimulatedExecutor executor = new SimulatedExecutor(
                 portfolio, config.tradingRules(), config.costModel());
         RiskPipeline pipeline = config.riskPipelineFactory().create(portfolio);
+        // Backtest runs without a business database, so the gate gets the in-memory store - which is what
+        // InMemoryRecordStore's javadoc says it is for. Nothing reads the refusals back yet; a discarding
+        // sink would have been smaller but would make the write path unobservable outside risk's own
+        // tests, and a row that exists can be surfaced later without touching the gate.
         RiskGate riskGate = new RiskGate(portfolio, new PositionSizer(config.sizerPolicy()),
-                config.tradingRules(), pipeline, clock);
+                config.tradingRules(), pipeline, clock, new InMemoryRecordStore());
         TradeTracker tradeTracker = new TradeTracker(portfolio);
         StrategyEngine strategyEngine = new StrategyEngine(config.strategies(), portfolio, clock);
         EquityRecorder equityRecorder = new EquityRecorder(portfolio);
