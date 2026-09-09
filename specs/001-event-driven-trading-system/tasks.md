@@ -67,9 +67,9 @@
 | T207 | `MaCrossStrategy`：金叉做多、死叉平多/翻空，fast/slow/allowShort 可配 | ST-02 | 构造 K 线序列触发预期信号单测 | ☑ |
 | T208 | `RsiReversalStrategy`：超卖做多、超买平多，period/os/ob（+可选 ATR 波动过滤）可配 | ST-03 | 同上 | ☑ |
 | T209 | `PositionSizer` + 风控直通闸门（alpha-risk）：信号 → 目标仓位增量 → stepSize 取整 → OrderRequestEvent；小于最小数量/名义则放弃并告警 | RK-07、边界 4 | 换算 + 取整 + 放弃告警单测 | ☑ |
-| T210 | `KlineRepository` 契约（common）+ `CsvKlineRepository`（backtest，DESIGN §10 的 CSV 回放源） | BT-01 | CSV round-trip 单测 | ☐ |
-| T211 | `JdbcKlineRepository`（alpha-app，SQLite/MySQL 同 schema）+ 建表 | BT-05、OP-04 前置 | 临时 SQLite 文件 round-trip 单测 | ☐ |
-| T212 | `BinanceKlineDownloader`（gateway REST，1500 根分页、base url testnet/实盘可配、限速退避） | BT-05、GW-05 | 解析单测（mock JSON）+ testnet 真实拉取入库 | ☐ |
+| T210 | `KlineRepository` 契约（common）+ `CsvKlineRepository`（backtest，DESIGN §10 的 CSV 回放源） | BT-01 | CSV round-trip 单测 | ☑ |
+| T211 | `JdbcKlineRepository`（alpha-app，SQLite/MySQL 同 schema）+ 建表 | BT-05、OP-04 前置 | 临时 SQLite 文件 round-trip 单测 | ☑ |
+| T212 | `BinanceKlineDownloader`（gateway REST，1500 根分页、base url testnet/实盘可配、限速退避） | BT-05、GW-05 | 解析单测（mock JSON）+ testnet 真实拉取入库 | ☑ |
 | T213 | `EventEngine.awaitQuiescence(eventId)`：回放方等本轮连锁闭环后再推进虚拟时钟 | BT-01、NFR-04 | 单测（等待返回时 cascade 已完成） | ☐ |
 | T214 | `BacktestDataFeeder`：按时间序回放 + 推进 VirtualClock + 数据缺口检测记录 | BT-01、边界 3 | 顺序性 + 缺根记录单测 | ☐ |
 | T215 | `SimulatedExecutor`：次根开盘价成交 + 滑点（固定 bp + 振幅比例）+ taker 手续费 + 资金费（8h 计提） | BT-02/03、边界 5 | 撮合规则单测 + **反未来函数断言**（信号根不成交、成交根不用未来价） | ☐ |
@@ -94,6 +94,11 @@
 >    DESIGN §8 的账户/单笔/组合/熔断/频率规则在 P3 以有序管道接在它前面，下游（OMS/撮合）无需改动。
 >    同理 `PositionSizer.Policy.targetExposure` 被限制在 (0, 1]：在账户级杠杆规则（FR-RK-02/04）就位前，
 >    sizer 不允许单靠自己把敞口放大到超过权益，上限放开必须与那两条规则同一个 PR 落地。
+> 5. **`JdbcKlineRepository` 的 MySQL 兼容目前是「构造上成立」，不是「实测通过」**：同一份方言中立 DDL（不用保留字、
+>    `VARCHAR`/`BIGINT`/主键三元组）、价格一律存**文本**（SQLite 的 NUMERIC 亲和性会把 `'36498.60'` 存成 double，
+>    MySQL 的 `DECIMAL(24,8)` 会补零成 `36498.60000000`，两者都会破坏逐位复现；这些列上没有任何 SQL 运算），
+>    `save` 的「新增/变更条数」由内存 diff 得出（MySQL 报*已修改*行数、SQLite 报*匹配*行数，驱动的返回值都答不了这个问题）。
+>    但测试只跑了 SQLite，`mysql-connector-j` 也刻意尚未加入依赖 —— 等 P3/P4 真正需要 MySQL 持久化时再补集成测试。
 
 ---
 
@@ -114,3 +119,4 @@
 | 2026-09-09 02:06 | T206（StrategyEngine 分发器） | 通过：新增 8 个单测全绿（alpha-strategy 累计 41）。分发规则：只投 closed bar（未收盘永不进策略，FR-BT-02）、按 symbol+interval 双维度过滤、同 symbol/interval 的多策略共用一份 BarSeries 且每根只追加一次（重复/乱序直接丢弃且不回调策略，边界 1）、按配置顺序分发保证可复现、单策略抛异常被隔离不影响其他策略 |
 | 2026-09-09 02:15 | T222（策略工厂注册 + app 装配） | 通过：新增 19 个单测（alpha-strategy 累计 60，全仓 84 全绿）。`StrategyFactory` 走 `META-INF/services` 发现，`StrategyRegistry` 按 yml 顺序构建；配置错误一律启动即失败（未知 type/重复 id/参数拼错/参数值非法/工厂忽略配置 id/两个工厂抢同一 type）。app 侧：删除 EchoStrategy 占位，新增 Portfolio 与 StrategyEngine bean，网关订阅改为「alpha.symbols ∪ 已启用策略声明的 symbol+interval」，避免新策略因无人订阅而静默空跑。实测：backtest profile 启动日志正确显示发现/启用/停用；paper profile 连上 stream.binancefuture.com 并订阅 BTCUSDT.PERP/1h |
 | 2026-09-09 02:28 | T209（PositionSizer + 风控直通闸门） | 通过：新增 27 个单测（alpha-risk 26 + alpha-common ClientOrderIds 5，另 StrategyEngineTest 补 1 条标记价断言；全仓 126 全绿）。四处理解决策：①金额精度抽到 `common.model.Money`（MC(24,HALF_UP)/scale 8）唯一定义，Portfolio 与 sizer 共用，避免两处各自取整导致回测与实盘漂移（数量断言按 scale 精确比对而非 compareTo）；②P2 的 `targetExposure` 上限钉死 1.0，杠杆/账户级敞口是 P3 的 FR-RK-02/04，规则未就位前不允许 sizer 自行放大账户；③闸门只发 MARKET 且 `price=null`——回测撮合按次根开盘、实盘按盘口，此处带限价要么是未来函数要么是过期报价；④`StrategyEngine` 在分发前用收盘 `portfolio.mark()`，否则 paper/live 每个信号都会因无标记价被 `RK-07-no-price` 拦死（回测因撮合先跑不易暴露）。边界 4 落实：不足 minNotional / stepSize 取整为 0 一律拒单 + WARNING 告警，绝不发脏单；无交易规则视为 CRITICAL 硬停 |
+| 2026-09-09 23:51 | T210-T212（历史数据层：契约 + CSV + JDBC + Binance 下载器） | 通过：新增 39 个单测（backtest 12、app 10、gateway 22 含 1 条按需 testnet IT；全仓 165 全绿）。契约决策：`KlineRepository.load` 必须返回**按 openTime 升序、每个 openTime 一根**，`save` 必须**幂等**（可重复覆盖同一区间），价格**原样存原样还**（绝不二次取整，NFR-04）——三条不变式让 CSV/SQLite/MySQL 对 feeder 与策略完全等价，T214 的缺口检测可以直接信任「一根一根」。`CsvKlineRepository` 走 `.tmp` + `ATOMIC_MOVE`（不支持则退化为普通 move），`changed==0` 时不落盘；损坏行报 `文件:行号`。`JdbcKlineRepository` 见取舍 5（建表自动执行，价格存文本，内存 diff 决定「新增/变更」计数）。`BinanceKlineDownloader`：1500 根分页、base url testnet/实盘可配（FR-GW-05）、429/418/5xx 退避重试并优先听 `Retry-After`、4xx 立即失败不重试；**绝不入库未收盘的那一根**（以 Clock 判定 `closeTime < now`），否则一个「其实从未存在的收盘价」会在之后每次回测里静默违反 FR-BT-02。实测 testnet 真实拉取 BTCUSDT.PERP 1h 近 100 天：`pages=2 fetched=2400 stored=2399 forming=1`，无缺口，全部满足 OHLC 与 `closeTime=openTime+1h-1` 不变式；公开端点无需密钥，FR-SEC-01 不受影响 |

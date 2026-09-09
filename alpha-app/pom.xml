@@ -14,10 +14,20 @@
     <name>alpha-app</name>
     <description>Spring Boot assembly: profiles, wiring, monitoring, alerts.</description>
 
+    <properties>
+        <!-- Not managed by the Spring Boot BOM. Local-dev historical data store (DESIGN §10). -->
+        <sqlite-jdbc.version>3.46.1.0</sqlite-jdbc.version>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.xerial</groupId>
+            <artifactId>sqlite-jdbc</artifactId>
+            <version>${sqlite-jdbc.version}</version>
         </dependency>
 
         <dependency>
