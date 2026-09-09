@@ -10,6 +10,7 @@ import com.ciaozn.alphatrader.common.model.Interval;
 import com.ciaozn.alphatrader.common.model.Kline;
 import com.ciaozn.alphatrader.common.model.Symbol;
 import com.ciaozn.alphatrader.common.model.TradingRules;
+import com.ciaozn.alphatrader.risk.PositionSizer;
 import com.ciaozn.alphatrader.strategy.config.StrategyRegistry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -165,7 +166,10 @@ class BacktestWiringTest {
         SimulatedExecutor.SimulatedFill normal = firstFill(run(fixture()));
 
         Fixture doubled = fixture();
-        doubled.exposure = new BigDecimal("0.60");
+        doubled.targetExposure = new BigDecimal("0.60");
+        // Raising the exposure without the cap is refused at binding time - a flip is one order of
+        // 2 x exposure, so the shipped 20% cap would block every one of them (取舍 17).
+        doubled.maxOrderNotionalFraction = new BigDecimal("1.20");
         SimulatedExecutor.SimulatedFill bigger = firstFill(run(doubled));
 
         // Same signal, same bar, same price - only the quantity moved. Comparing the whole fill
@@ -178,7 +182,7 @@ class BacktestWiringTest {
         // And in the other direction the knob reaches the sizer too: this sizes below the exchange
         // minimum, so nothing at all is sent rather than a dirty order.
         Fixture tiny = fixture();
-        tiny.exposure = new BigDecimal("0.001");
+        tiny.targetExposure = new BigDecimal("0.001");
         assertThat(run(tiny).fills()).isEmpty();
     }
 
@@ -259,7 +263,7 @@ class BacktestWiringTest {
     @Test
     void anAbsentBacktestBlockStillHasAUsableShape() {
         AlphaProperties properties = new AlphaProperties(
-                "backtest", null, null, true, null, null, null, null, null, null);
+                "backtest", null, null, true, null, null, null, null, null, null, null);
         AlphaProperties.Backtest backtest = properties.backtest();
 
         assertThat(backtest.data().source()).isEqualTo("csv");
@@ -281,9 +285,11 @@ class BacktestWiringTest {
         assertThat(backtest.from()).isNull();
         assertThat(backtest.to()).isNull();
 
-        // And these three stay unset rather than defaulting here, so the numbers in
+        // And these stay unset rather than defaulting here, so the numbers in
         // PositionSizer.Policy, SimulatedExecutor.CostModel and EventEngine remain the only ones.
-        assertThat(backtest.exposure()).isNull();
+        assertThat(properties.risk().sizing().targetExposure()).isNull();
+        assertThat(properties.risk().sizing().effectiveTargetExposure())
+                .isEqualTo(PositionSizer.Policy.DEFAULT.targetExposure());
         assertThat(backtest.cost()).isNull();
         assertThat(backtest.quiescenceTimeout()).isNull();
     }
@@ -300,7 +306,8 @@ class BacktestWiringTest {
         private Instant from = Instant.ofEpochMilli(T0);
         private Instant to = Instant.ofEpochMilli(T0 + (BARS - 1) * HOUR);
         private List<AlphaProperties.Backtest.SeriesEntry> series = List.of();
-        private BigDecimal exposure;
+        private BigDecimal targetExposure;
+        private BigDecimal maxOrderNotionalFraction;
         private AlphaProperties.Backtest.Cost cost;
         private List<AlphaProperties.Backtest.RuleEntry> rules = List.of(
                 new AlphaProperties.Backtest.RuleEntry("BTCUSDT.PERP", BTC_RULES.tickSize(),
@@ -311,7 +318,23 @@ class BacktestWiringTest {
         private AlphaProperties.Backtest backtest() {
             return new AlphaProperties.Backtest(
                     new AlphaProperties.Backtest.Data(source, klines(), jdbcUrl),
-                    from, to, series, exposure, cost, rules, reports(), journal, null);
+                    from, to, series, cost, rules, reports(), journal, null);
+        }
+
+        /**
+         * Only sizing is overridden here; the other four levels stay at DESIGN §8's defaults. The
+         * order cap is the one other knob a test may need, because it is coupled to the exposure:
+         * raising one without the other is refused at binding time.
+         */
+        private AlphaProperties.Risk risk() {
+            AlphaProperties.Risk defaults = AlphaProperties.Risk.DEFAULTS;
+            AlphaProperties.Risk.Order order = maxOrderNotionalFraction == null
+                    ? defaults.order()
+                    : new AlphaProperties.Risk.Order(true, maxOrderNotionalFraction,
+                            defaults.order().maxPriceDeviation());
+            return new AlphaProperties.Risk(defaults.account(), order, defaults.portfolio(),
+                    defaults.breaker(), defaults.frequency(),
+                    new AlphaProperties.Risk.Sizing(targetExposure));
         }
     }
 
@@ -330,6 +353,7 @@ class BacktestWiringTest {
         params.put("allow-short", "false");
         AlphaProperties properties = new AlphaProperties("backtest", List.of("BTCUSDT.PERP"), "1h",
                 true, new AlphaProperties.Trading(false), Path.of("logs"), fixture.initialCash,
+                fixture.risk(),
                 List.of(new AlphaProperties.StrategyEntry("ma-btc", "ma-cross", true, null, null, params)),
                 fixture.backtest(), null);
         return new BacktestWiring(properties, new StrategyRegistry()).backtest();

@@ -33,14 +33,22 @@ public final class PositionSizer {
 
     /**
      * @param targetExposure fraction of equity one symbol should hold at full signal strength,
-     *                       e.g. 0.30 for 30%. Capped at 1.0 on purpose: leverage is the
+     *                       e.g. 0.10 for 10%. Capped at 1.0 on purpose: leverage is the
      *                       account-level rule's decision (FR-RK-02, implemented in P3), and
      *                       until that rule exists the sizer must not be able to overshoot the
      *                       account on its own.
      */
     public record Policy(BigDecimal targetExposure) {
 
-        public static final Policy DEFAULT = new Policy(new BigDecimal("0.30"));
+        /**
+         * 0.10, and the number is coupled to the order-level cap: a flip is one order of
+         * 2 x targetExposure (close the long, open the short), so with DESIGN §8's 单笔 ≤20% 权益 a
+         * larger exposure would have every flip and every entry-to-target blocked by FR-RK-03 - the
+         * account would keep holding a position the strategy had already reversed out of, with only
+         * an alert to show for it. {@code AlphaProperties.Risk} refuses to start on a configuration
+         * where {@code order.max-notional-fraction < 2 x targetExposure}.
+         */
+        public static final Policy DEFAULT = new Policy(new BigDecimal("0.10"));
 
         public Policy {
             if (targetExposure == null || targetExposure.signum() <= 0

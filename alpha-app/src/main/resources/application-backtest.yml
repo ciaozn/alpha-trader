@@ -13,9 +13,8 @@ alpha:
     # to: 2023-12-15T00:00:00Z
     # Empty means "replay whatever the enabled strategies listen to".
     series: []
-    # Target exposure per signal, in (0, 1]. Unset falls back to PositionSizer.Policy.DEFAULT -
-    # the number is not repeated here so the two cannot drift apart.
-    # exposure: 0.30
+    # Target exposure is alpha.risk.sizing.target-exposure in application.yml, not here: it sizes an
+    # order in paper and live too, and a backtest-only knob would let the modes disagree (FR-BT-06).
     # Simulated costs. Each unset field falls back to SimulatedExecutor.CostModel.DEFAULT.
     # cost:
     #   taker-fee-rate: 0.0005

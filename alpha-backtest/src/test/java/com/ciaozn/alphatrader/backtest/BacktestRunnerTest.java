@@ -71,8 +71,9 @@ class BacktestRunnerTest {
         assertThat(report.fills()).hasSize(1);
         SimulatedExecutor.SimulatedFill fill = report.fills().get(0);
         assertThat(fill.symbol()).isEqualTo(BTC);
-        // 0.30 exposure x 10000 equity / 101 mark (bar 0's close), floored to stepSize 0.001.
-        assertThat(fill.qty()).isEqualByComparingTo("29.702");
+        // Policy.DEFAULT's 0.10 exposure x 10000 equity / 101 mark (bar 0's close), floored to
+        // stepSize 0.001: 1000 / 101 = 9.90099 -> 9.900.
+        assertThat(fill.qty()).isEqualByComparingTo("9.900");
         // 5bp fixed + 5% of bar 0's 300bp amplitude, then bar 1's open of 102 slipped up and
         // aligned to tickSize 0.01 against the trader: 102 x 1.0020 = 102.204 -> 102.21.
         assertThat(fill.slippageBps()).isEqualByComparingTo("20");

@@ -118,7 +118,7 @@ public class BacktestWiring implements ApplicationRunner {
         KlineRepository repository = DataPlan.store(backtest.data());
         List<Series> series = DataPlan.series(backtest.series(), strategies);
         return new BacktestRunner.Config(repository, series, from, to, properties.initialCash(),
-                rules, strategies, policy(backtest), RiskPipeline.empty(), costModel(backtest),
+                rules, strategies, policy(properties.risk().sizing()), RiskPipeline.empty(), costModel(backtest),
                 quiescenceTimeout(backtest), journal(backtest, directory));
     }
 
@@ -145,10 +145,10 @@ public class BacktestWiring implements ApplicationRunner {
         return new FixedTradingRulesProvider(rules);
     }
 
-    private static PositionSizer.Policy policy(AlphaProperties.Backtest backtest) {
-        return backtest.exposure() == null
-                ? PositionSizer.Policy.DEFAULT
-                : new PositionSizer.Policy(backtest.exposure());
+    private static PositionSizer.Policy policy(AlphaProperties.Risk.Sizing sizing) {
+        // effectiveTargetExposure() substitutes PositionSizer.Policy.DEFAULT, so the number has one
+        // definition and there is no second "unset" branch here to drift away from it.
+        return new PositionSizer.Policy(sizing.effectiveTargetExposure());
     }
 
     /** Per-field fallback, so {@code cost: {taker-fee-rate: 0}} means "no fee, default everything else". */

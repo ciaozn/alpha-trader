@@ -16,6 +16,52 @@ alpha:
   journal-dir: logs
   # Starting book for backtest and paper. Live reconciles it against the exchange from P3.
   initial-cash: 10000
+  # Risk limits (DESIGN §8), shared and therefore declared here rather than in a profile file: a
+  # backtest that ran with looser limits than live would stop being evidence about live trading
+  # (FR-BT-06), and Spring loads application-<profile>.yml only for the active profile.
+  # EVERY LIMIT IS A FRACTION, not a percentage - 0.20 means 20% of equity. AlphaProperties.Risk
+  # carries the same numbers so an absent block still means "DESIGN §8, all five levels on" rather
+  # than "no rules", and RiskPropertiesTest pins both to that table so the two cannot drift.
+  risk:
+    # 账户级: total leverage cap, and the margin-ratio floor below which no new position may open.
+    # min-margin-ratio is THIS system's equity / usedMargin, usedMargin = total notional /
+    # max-leverage - not Binance's field of the same name, which runs the other way (higher is
+    # closer to liquidation). The exchange's number belongs to reconciliation, not to this rule.
+    account:
+      enabled: true
+      max-leverage: 3
+      min-margin-ratio: 1.50
+    # 订单级: one order's notional cap, and the fat-finger guard on a limit price. A MARKET order
+    # carries no price and skips the deviation check - the gate only ever sends MARKET.
+    order:
+      enabled: true
+      max-notional-fraction: 0.20
+      max-price-deviation: 0.02
+    # 组合级, judged on the book as it would be AFTER this order fills: judging the current totals
+    # would pass every order that grows an already-oversized book one step at a time.
+    portfolio:
+      enabled: true
+      max-total-notional-fraction: 0.60
+      max-symbol-notional-fraction: 0.30
+    # 熔断级: down 5% from the UTC day's opening equity stops new positions for the rest of that UTC
+    # day; 3 closed losing trades in a row pause trading for 2h.
+    breaker:
+      enabled: true
+      daily-loss-fraction: 0.05
+      consecutive-losses: 3
+      pause: 2h
+    # 频率级: sliding window, at most 10 orders per minute.
+    frequency:
+      enabled: true
+      max-orders: 10
+      window: 1m
+    # alpha.risk.sizing.target-exposure (fraction of equity one symbol holds at full signal
+    # strength) is deliberately NOT declared here. The number lives in PositionSizer.Policy.DEFAULT
+    # (0.10), which every programmatic caller reads; restating it would give the sizer's behaviour a
+    # second definition, and an empty `sizing:` node would not even bind (Spring would try to convert
+    # an empty string to the record). Leave the whole block out and Risk normalizes it to
+    # Sizing.DEFAULTS. It is coupled to max-notional-fraction above: a flip is one order of
+    # 2 x target-exposure, so startup is refused unless max-notional-fraction >= 2 x target-exposure.
   # The kline store. Shared, so it lives in the shared file: the download profile writes it and the
   # backtest profile reads it, and Spring loads application-<profile>.yml only for the active
   # profile. Declaring it in application-backtest.yml would leave the download writing to the

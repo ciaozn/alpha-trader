@@ -49,7 +49,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * re-measure itself and every threshold below would drift with the market.
  * {@code BacktestSmokeFixtureTest} regenerates it and asserts that regenerating it changes nothing.
  *
- * <p>The measured baseline is a <em>loss</em>: -13.4% over the window with a 15.8% maximum
+ * <p>The measured baseline is a <em>loss</em>: -4.6% over the window with a 5.5% maximum
  * drawdown. A green smoke test therefore says the pipeline is unchanged, and nothing at all about
  * whether the shipped strategy is worth running - that question belongs to the operator reading the
  * report, not to CI.
@@ -183,11 +183,11 @@ class BacktestSmokeTest {
         // being pinned is that the pipeline still produces exactly these numbers - a change to the
         // fill price, the cost model, the indicator windows or the sizing moves them, and whoever
         // moves them has to come here and say why.
-        assertThat(metrics.totalReturn()).isEqualTo(new BigDecimal("-0.13417588"));
-        assertThat(metrics.maxDrawdown()).isEqualTo(new BigDecimal("0.15788502"));
-        assertThat(metrics.finalEquity()).isEqualTo(new BigDecimal("8658.24122746"));
-        assertThat(metrics.totalFees()).isEqualTo(new BigDecimal("338.75374834"));
-        assertThat(report.fundingTotal()).isEqualTo(new BigDecimal("10.59291420"));
+        assertThat(metrics.totalReturn()).isEqualTo(new BigDecimal("-0.04561396"));
+        assertThat(metrics.maxDrawdown()).isEqualTo(new BigDecimal("0.05452565"));
+        assertThat(metrics.finalEquity()).isEqualTo(new BigDecimal("9543.86042895"));
+        assertThat(metrics.totalFees()).isEqualTo(new BigDecimal("119.16422793"));
+        assertThat(report.fundingTotal()).isEqualTo(new BigDecimal("3.79529312"));
 
         // Counts are the most legible signal that behaviour moved: 123 fills close 122 round trips
         // and leave one position open at the end of the data, of which 32 were wins.
@@ -215,8 +215,10 @@ class BacktestSmokeTest {
 
     /**
      * The shipped defaults from {@code application.yml} - {@code ma-cross-btc} at 10/30 with
-     * shorting allowed, and the shared {@code alpha.initial-cash}. A smoke test that invented its
-     * own configuration would keep passing while the one an operator actually runs broke.
+     * shorting allowed, the shared {@code alpha.initial-cash}, and a null {@code risk} block, which
+     * substitutes {@code AlphaProperties.Risk.DEFAULTS}: the same numbers the shipped yml declares,
+     * pinned to DESIGN §8 from both sides by {@code RiskPropertiesTest}. A smoke test that invented
+     * its own configuration would keep passing while the one an operator actually runs broke.
      */
     private static AlphaProperties properties(Path reportDir) {
         Map<String, String> params = new LinkedHashMap<>();
@@ -225,12 +227,12 @@ class BacktestSmokeTest {
         params.put("allow-short", "true");
         AlphaProperties.Backtest backtest = new AlphaProperties.Backtest(
                 new AlphaProperties.Backtest.Data("csv", dataset(), null),
-                Instant.ofEpochMilli(FROM), Instant.ofEpochMilli(TO), List.of(), null, null,
+                Instant.ofEpochMilli(FROM), Instant.ofEpochMilli(TO), List.of(), null,
                 List.of(new AlphaProperties.Backtest.RuleEntry(BTC.unified(), RULES.tickSize(),
                         RULES.stepSize(), RULES.minNotional())),
                 reportDir, false, null);
         return new AlphaProperties("backtest", List.of(BTC.unified()), "1h", true,
-                new AlphaProperties.Trading(false), Path.of("logs"), EQUITY,
+                new AlphaProperties.Trading(false), Path.of("logs"), EQUITY, null,
                 List.of(new AlphaProperties.StrategyEntry("ma-cross-btc", "ma-cross", true, null, null, params)),
                 backtest, null);
     }

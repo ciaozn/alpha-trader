@@ -23,7 +23,10 @@ class PositionSizerTest {
     private static final TradingRules BTC_RULES =
             new TradingRules(BTC, new BigDecimal("0.10"), new BigDecimal("0.001"), new BigDecimal("20"));
 
-    private final PositionSizer sizer = new PositionSizer(PositionSizer.Policy.DEFAULT);
+    // 0.30 by name rather than Policy.DEFAULT: every quantity below is hand-computed against it,
+    // and the default is a configuration number that moves when DESIGN §8's order cap does. The
+    // default's own value is pinned in defaultsTargetExposureLeavesRoomForAFlip.
+    private final PositionSizer sizer = new PositionSizer(new PositionSizer.Policy(new BigDecimal("0.30")));
 
     private PositionSizer.Result size(Direction direction, double strength, String equity,
                                       String held, String price) {
@@ -185,5 +188,17 @@ class PositionSizerTest {
                 BigDecimal.ZERO, new BigDecimal("100"), BTC_RULES);
         assertOrder(result, Side.BUY, "10.000");
         assertThat(cautious.policy().targetExposure()).isEqualByComparingTo("0.10");
+    }
+
+    @Test
+    void defaultsTargetExposureLeavesRoomForAFlip() {
+        // DESIGN §8 caps one order at 20% of equity, and a flip is two orders of the target
+        // exposure (cover the long, open the short). At 0.30 the default configuration would have
+        // refused every flip and every entry-to-target, which reads as a broken strategy rather
+        // than as an over-large default - hence 0.10 here and the same inequality enforced on
+        // operator-supplied numbers by AlphaProperties.Risk.
+        assertThat(PositionSizer.Policy.DEFAULT.targetExposure()).isEqualByComparingTo("0.10");
+        assertThat(PositionSizer.Policy.DEFAULT.targetExposure().multiply(BigDecimal.valueOf(2)))
+                .isLessThanOrEqualTo(new BigDecimal("0.20"));
     }
 }

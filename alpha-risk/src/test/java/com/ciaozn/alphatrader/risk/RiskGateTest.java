@@ -47,7 +47,11 @@ class RiskGateTest {
     private Harness harness(RiskPipeline pipeline, String cash, TradingRules... rules) {
         Portfolio portfolio = new Portfolio(new BigDecimal(cash));
         VirtualClock clock = new VirtualClock(T0);
-        RiskGate gate = new RiskGate(portfolio, new PositionSizer(PositionSizer.Policy.DEFAULT),
+        // Explicit 0.30 rather than Policy.DEFAULT: this harness tests gate ordering, not exposure
+        // arithmetic, and several cases below hand-compute a target of 30 and apply fills of 30 to
+        // stand for an already-held position. The default's own value is pinned in PositionSizerTest.
+        RiskGate gate = new RiskGate(portfolio,
+                new PositionSizer(new PositionSizer.Policy(new BigDecimal("0.30"))),
                 FixedTradingRulesProvider.of(rules), pipeline, clock);
         return new Harness(portfolio, clock, gate);
     }
