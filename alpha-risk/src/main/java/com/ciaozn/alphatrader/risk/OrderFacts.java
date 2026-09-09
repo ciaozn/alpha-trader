@@ -61,4 +61,17 @@ public record OrderFacts(
         return new OrderFacts(facts, side, qty, limitPrice, orderNotional, projectedSignedQty,
                 projectedSymbolNotional, projectedTotalNotional);
     }
+
+    /**
+     * True when this order strictly shrinks the position magnitude in its own symbol - a partial or
+     * full close, but not a flip to an equal-or-larger size. Such an order is de-risking: it can only
+     * move this symbol's notional, and therefore the book's total notional, <em>down</em>, so it can
+     * never newly breach a cap - but on a book that is already over one, its projected notional is
+     * still over, and capping it would trap a position the account is trying to exit. Both order-stage
+     * caps (FR-RK-03 single-order, FR-RK-04 portfolio) therefore exempt a reduction, and the predicate
+     * lives here so the two rules cannot drift apart about what counts as de-risking.
+     */
+    public boolean reduces() {
+        return projectedSignedQty.abs().compareTo(signal.signedQty().abs()) < 0;
+    }
 }

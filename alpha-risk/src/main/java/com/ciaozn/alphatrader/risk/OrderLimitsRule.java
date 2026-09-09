@@ -107,10 +107,8 @@ public final class OrderLimitsRule implements OrderRule {
         }
 
         // Single-order notional cap, exempting reductions: an order that shrinks the position is
-        // de-risking and must not be trapped by a cap meant to bound new exposure.
-        boolean reduces = facts.projectedSignedQty().abs()
-                .compareTo(facts.signal().signedQty().abs()) < 0;
-        if (!reduces) {
+        // de-risking and must not be trapped by a cap meant to bound new exposure (OrderFacts.reduces).
+        if (!facts.reduces()) {
             BigDecimal equity = facts.signal().equity();
             BigDecimal cap = Money.of(equity.multiply(maxNotionalFraction, Money.MC));
             if (facts.orderNotional().compareTo(cap) > 0) {
