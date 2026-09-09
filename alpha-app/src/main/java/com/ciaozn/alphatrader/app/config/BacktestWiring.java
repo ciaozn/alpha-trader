@@ -15,6 +15,7 @@ import com.ciaozn.alphatrader.engine.EventEngine;
 import com.ciaozn.alphatrader.engine.EventJournal;
 import com.ciaozn.alphatrader.engine.JsonlEventJournal;
 import com.ciaozn.alphatrader.risk.PositionSizer;
+import com.ciaozn.alphatrader.risk.RiskPipeline;
 import com.ciaozn.alphatrader.strategy.Strategy;
 import com.ciaozn.alphatrader.strategy.config.StrategyRegistry;
 import org.slf4j.Logger;
@@ -117,7 +118,7 @@ public class BacktestWiring implements ApplicationRunner {
         KlineRepository repository = DataPlan.store(backtest.data());
         List<Series> series = DataPlan.series(backtest.series(), strategies);
         return new BacktestRunner.Config(repository, series, from, to, properties.initialCash(),
-                rules, strategies, policy(backtest), costModel(backtest),
+                rules, strategies, policy(backtest), RiskPipeline.empty(), costModel(backtest),
                 quiescenceTimeout(backtest), journal(backtest, directory));
     }
 

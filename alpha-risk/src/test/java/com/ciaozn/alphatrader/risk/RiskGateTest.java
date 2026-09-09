@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -40,10 +41,14 @@ class RiskGateTest {
     }
 
     private Harness harness(String cash, TradingRules... rules) {
+        return harness(RiskPipeline.empty(), cash, rules);
+    }
+
+    private Harness harness(RiskPipeline pipeline, String cash, TradingRules... rules) {
         Portfolio portfolio = new Portfolio(new BigDecimal(cash));
         VirtualClock clock = new VirtualClock(T0);
         RiskGate gate = new RiskGate(portfolio, new PositionSizer(PositionSizer.Policy.DEFAULT),
-                FixedTradingRulesProvider.of(rules), clock);
+                FixedTradingRulesProvider.of(rules), pipeline, clock);
         return new Harness(portfolio, clock, gate);
     }
 
@@ -209,5 +214,156 @@ class RiskGateTest {
                 published::add);
 
         assertThat(published).isEmpty();
+    }
+
+    // ------------------------------------------------------------------ the pipeline (FR-RK-01)
+
+    /** Records what the gate showed it and returns a fixed verdict; null verdict means "no objection". */
+    private static final class StubSignalRule implements SignalRule {
+
+        private final String ruleId;
+        private final RiskRule.Level level;
+        private final RiskRejection verdict;
+        private final List<SignalFacts> seen = new ArrayList<>();
+
+        StubSignalRule(String ruleId, RiskRule.Level level, RiskRejection verdict) {
+            this.ruleId = ruleId;
+            this.level = level;
+            this.verdict = verdict;
+        }
+
+        @Override
+        public String ruleId() {
+            return ruleId;
+        }
+
+        @Override
+        public RiskRule.Level level() {
+            return level;
+        }
+
+        @Override
+        public Optional<RiskRejection> check(SignalFacts facts) {
+            seen.add(facts);
+            return Optional.ofNullable(verdict);
+        }
+    }
+
+    private static final class StubOrderRule implements OrderRule {
+
+        private final String ruleId;
+        private final RiskRule.Level level;
+        private final RiskRejection verdict;
+        private final List<OrderFacts> seen = new ArrayList<>();
+
+        StubOrderRule(String ruleId, RiskRule.Level level, RiskRejection verdict) {
+            this.ruleId = ruleId;
+            this.level = level;
+            this.verdict = verdict;
+        }
+
+        @Override
+        public String ruleId() {
+            return ruleId;
+        }
+
+        @Override
+        public RiskRule.Level level() {
+            return level;
+        }
+
+        @Override
+        public Optional<RiskRejection> check(OrderFacts facts) {
+            seen.add(facts);
+            return Optional.ofNullable(verdict);
+        }
+    }
+
+    private static RiskRejection rejection(String ruleId, RiskRule.Level level) {
+        return new RiskRejection(ruleId, level, RiskAlertEvent.Severity.WARNING, "stub objection");
+    }
+
+    @Test
+    void aSignalStageRuleRejectsBeforeTheSignalIsEverSized() {
+        StubSignalRule breaker = new StubSignalRule("RK-05-daily-loss", RiskRule.Level.CIRCUIT_BREAKER,
+                rejection("RK-05-daily-loss", RiskRule.Level.CIRCUIT_BREAKER));
+        Harness harness = harness(new RiskPipeline(List.of(breaker), List.of()), "10000", BTC_RULES);
+        harness.portfolio().mark(BTC, new BigDecimal("100"));
+
+        // Strength 0 sizes to "no trade", which publishes nothing at all. The alert below can only
+        // exist because the pipeline ran first - sizing first would have ended the attempt silently
+        // and the breaker would never have learned it was asked.
+        harness.gate().onEvent(signal("ma-cross-btc", BTC, Direction.LONG, 0.0), published::add);
+
+        assertThat(orders(published)).isEmpty();
+        assertThat(alerts(published)).hasSize(1);
+        assertThat(alerts(published).getFirst().ruleId()).isEqualTo("RK-05-daily-loss");
+        assertThat(breaker.seen).hasSize(1);
+        assertThat(harness.gate().signalsBlocked()).isEqualTo(1);
+        assertThat(harness.gate().ordersPassed()).isZero();
+    }
+
+    @Test
+    void anOrderStageRuleSeesTheCandidateQuantityAndCanBlockAnOtherwiseValidOrder() {
+        StubOrderRule cap = new StubOrderRule("RK-03-order-notional", RiskRule.Level.ORDER,
+                rejection("RK-03-order-notional", RiskRule.Level.ORDER));
+        Harness harness = harness(new RiskPipeline(List.of(), List.of(cap)), "10000", BTC_RULES);
+        harness.portfolio().mark(BTC, new BigDecimal("100"));
+
+        harness.gate().onEvent(signal("ma-cross-btc", BTC, Direction.LONG, 1.0), published::add);
+
+        assertThat(orders(published)).isEmpty();
+        assertThat(alerts(published)).hasSize(1);
+        assertThat(alerts(published).getFirst().ruleId()).isEqualTo("RK-03-order-notional");
+        assertThat(harness.gate().signalsBlocked()).isEqualTo(1);
+        // What the rule was shown is the point of the second stage: the sized quantity, and the
+        // notional at the same mark the sizer used.
+        assertThat(cap.seen).hasSize(1);
+        assertThat(cap.seen.getFirst().side()).isEqualTo(Side.BUY);
+        assertThat(cap.seen.getFirst().qty()).isEqualByComparingTo("30.000");
+        assertThat(cap.seen.getFirst().orderNotional()).isEqualByComparingTo("3000");
+        assertThat(cap.seen.getFirst().projectedTotalNotional()).isEqualByComparingTo("3000");
+    }
+
+    @Test
+    void anOrderStageRuleIsNotConsultedWhenSizingProducesNoOrder() {
+        StubOrderRule cap = new StubOrderRule("RK-03-order-notional", RiskRule.Level.ORDER, null);
+        Harness harness = harness(new RiskPipeline(List.of(), List.of(cap)), "10000", BTC_RULES);
+        harness.portfolio().mark(BTC, new BigDecimal("100"));
+
+        harness.gate().onEvent(signal("ma-cross-btc", BTC, Direction.FLAT, 1.0), published::add);
+
+        assertThat(cap.seen).isEmpty();
+        assertThat(published).isEmpty();
+    }
+
+    @Test
+    void bothStagesAndTheSizerSeeOneSnapshotOfTheAccount() {
+        StubSignalRule early = new StubSignalRule("RK-02-leverage", RiskRule.Level.ACCOUNT, null);
+        StubOrderRule late = new StubOrderRule("RK-04-symbol-exposure", RiskRule.Level.PORTFOLIO, null);
+        Harness harness = harness(new RiskPipeline(List.of(early), List.of(late)), "10000", BTC_RULES);
+        harness.portfolio().mark(BTC, new BigDecimal("100"));
+
+        harness.gate().onEvent(signal("ma-cross-btc", BTC, Direction.LONG, 1.0), published::add);
+
+        assertThat(orders(published)).hasSize(1);
+        assertThat(late.seen).hasSize(1);
+        // Same object, not merely equal values: a mark landing mid-decision would otherwise let the
+        // alert quote an account state that is not the one the decision was made against.
+        assertThat(late.seen.getFirst().signal()).isSameAs(early.seen.getFirst());
+    }
+
+    @Test
+    void missingTradingRulesIsCheckedBeforeThePipelineRuns() {
+        StubSignalRule breaker = new StubSignalRule("RK-05-daily-loss", RiskRule.Level.CIRCUIT_BREAKER, null);
+        Harness harness = harness(new RiskPipeline(List.of(breaker), List.of()), "10000", BTC_RULES);
+        harness.portfolio().mark(ETH, new BigDecimal("100"));
+
+        harness.gate().onEvent(signal("ma-cross-eth", ETH, Direction.LONG, 1.0), published::add);
+
+        assertThat(breaker.seen).isEmpty();
+        assertThat(alerts(published)).hasSize(1);
+        assertThat(alerts(published).getFirst().ruleId()).isEqualTo(RiskGate.RULE_MISSING_TRADING_RULES);
+        assertThat(alerts(published).getFirst().severity()).isEqualTo(RiskAlertEvent.Severity.CRITICAL);
     }
 }

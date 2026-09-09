@@ -18,6 +18,7 @@ import com.ciaozn.alphatrader.engine.EventEngine;
 import com.ciaozn.alphatrader.engine.EventJournal;
 import com.ciaozn.alphatrader.risk.PositionSizer;
 import com.ciaozn.alphatrader.risk.RiskGate;
+import com.ciaozn.alphatrader.risk.RiskPipeline;
 import com.ciaozn.alphatrader.strategy.Strategy;
 import com.ciaozn.alphatrader.strategy.StrategyEngine;
 import org.slf4j.Logger;
@@ -71,9 +72,11 @@ public final class BacktestRunner {
     }
 
     /**
-     * Everything one run needs. The convenience constructor fills in the four inputs that have an
+     * Everything one run needs. The convenience constructor fills in the five inputs that have an
      * obviously correct default; the canonical one exists so a caller - alpha-app reading yml, a
-     * cost-sensitivity sweep - can override any of them.
+     * cost-sensitivity sweep - can override any of them. An empty pipeline means "no rules beyond
+     * sizing", which is <em>not</em> what a shipped configuration should use: the backtest is only
+     * evidence about live trading if both run the same rules (FR-BT-06).
      *
      * <p>Three configurations are refused rather than replayed, all because each would produce a
      * report that looks like a result: no strategies, a non-positive account, and a symbol a
@@ -90,6 +93,7 @@ public final class BacktestRunner {
             TradingRulesProvider tradingRules,
             List<Strategy> strategies,
             PositionSizer.Policy sizerPolicy,
+            RiskPipeline riskPipeline,
             SimulatedExecutor.CostModel costModel,
             Duration quiescenceTimeout,
             EventJournal journal) {
@@ -126,7 +130,7 @@ public final class BacktestRunner {
                       BigDecimal startingEquity, TradingRulesProvider tradingRules,
                       List<Strategy> strategies) {
             this(repository, series, fromOpenTime, toOpenTime, startingEquity, tradingRules, strategies,
-                    PositionSizer.Policy.DEFAULT, SimulatedExecutor.CostModel.DEFAULT,
+                    PositionSizer.Policy.DEFAULT, RiskPipeline.empty(), SimulatedExecutor.CostModel.DEFAULT,
                     EventEngine.DEFAULT_QUIESCENCE_TIMEOUT, EventJournal.noop());
         }
     }
@@ -149,7 +153,7 @@ public final class BacktestRunner {
         SimulatedExecutor executor = new SimulatedExecutor(
                 portfolio, config.tradingRules(), config.costModel());
         RiskGate riskGate = new RiskGate(portfolio, new PositionSizer(config.sizerPolicy()),
-                config.tradingRules(), clock);
+                config.tradingRules(), config.riskPipeline(), clock);
         TradeTracker tradeTracker = new TradeTracker(portfolio);
         StrategyEngine strategyEngine = new StrategyEngine(config.strategies(), portfolio, clock);
         EquityRecorder equityRecorder = new EquityRecorder(portfolio);

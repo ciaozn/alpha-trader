@@ -1,0 +1,46 @@
+package com.ciaozn.alphatrader.risk;
+
+import com.ciaozn.alphatrader.common.model.Money;
+import com.ciaozn.alphatrader.common.model.Side;
+
+import java.math.BigDecimal;
+
+/**
+ * The candidate order plus the account <em>as it would be if that order filled</em>. The projected
+ * numbers are what makes the portfolio-level rules (FR-RK-04) meaningful: checking the current
+ * total notional would pass every order that grows an already-oversized book one step at a time,
+ * and checking only the order's own notional would miss an order that is small relative to equity
+ * but doubles one symbol.
+ *
+ * <p><b>The notional is estimated at the mark, and that is the only honest option here.</b> The gate
+ * sends MARKET orders only (a limit price at this point would be either look-ahead bias in backtest
+ * or a stale quote in live), so an order-level cap that insisted on a real price would never fire on
+ * anything the system actually sends - it would be a rule that looks configured and never runs.
+ * The estimate is conservative in the sense that matters: it is the same price the sizer used to
+ * produce the quantity.
+ */
+public record OrderFacts(
+        SignalFacts signal,
+        Side side,
+        BigDecimal qty,
+        BigDecimal orderNotional,
+        BigDecimal projectedSignedQty,
+        BigDecimal projectedSymbolNotional,
+        BigDecimal projectedTotalNotional) {
+
+    public static OrderFacts of(SignalFacts facts, Side side, BigDecimal qty) {
+        BigDecimal orderNotional = Money.of(qty.multiply(facts.price()));
+        BigDecimal projectedSignedQty = side == Side.BUY
+                ? facts.signedQty().add(qty)
+                : facts.signedQty().subtract(qty);
+        BigDecimal projectedSymbolNotional = Money.of(projectedSignedQty.abs().multiply(facts.price()));
+        // Swap this symbol's slice of the total rather than re-marking the whole book: the other
+        // positions have not moved, and re-reading them would make the projection depend on marks
+        // arriving between the two reads.
+        BigDecimal projectedTotalNotional = Money.of(facts.totalNotional()
+                .subtract(facts.symbolNotional())
+                .add(projectedSymbolNotional));
+        return new OrderFacts(facts, side, qty, orderNotional, projectedSignedQty,
+                projectedSymbolNotional, projectedTotalNotional);
+    }
+}
