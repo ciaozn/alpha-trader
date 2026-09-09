@@ -1,11 +1,11 @@
-# Tasks 001: Alpha Trader 细粒度任务清单（P0 + P1 + P2）
+# Tasks 001: Alpha Trader 细粒度任务清单（P0 + P1 + P2 + P3）
 
 | 字段 | 值 |
 |---|---|
-| 状态 | P0+P1 已完成（T112 留用户验收）；P2 细化并开工中 |
+| 状态 | P0+P1+P2 已完成（T112 留用户验收）；P3 已细化并开工中 |
 | 创建日期 | 2026-09-09 |
 | 上游文档 | [plan.md](./plan.md)（Approved）· [spec.md](./spec.md)（Approved） |
-| 生成策略 | 滚动式：本文件含 P0+P1+P2 细任务；P3 及以后临近开工再细化 |
+| 生成策略 | 滚动式：本文件含 P0+P1+P2+P3 细任务；P4 及以后临近开工再细化 |
 
 > 每条任务 ≤ 2 小时工作量，含验收命令。完成后勾选并记录验收结果。
 
@@ -144,6 +144,88 @@ SC-02 见 T220/T221（同输入三次逐位一致，且 26k 根上三个独立 J
 
 ---
 
+## P3 风控 + OMS 全链路
+
+> 本阶段是系统第一次"碰"交易所的写接口（plan §6）：信号 → 风控闸门 → 下单 → 成交 → 持仓更新。
+> **环境事实（沿用 P2，2026-09-10 复核）**：本机可直连 testnet REST/WS，但**没有任何 API Key**
+> （用户未提供；FR-SEC-01 要求密钥只走环境变量，仓库零密钥）。因此凡验收需要「真实下单 / 真实成交回报 /
+> 真实对账」的部分（T321 全部，T316-T318 的 testnet 实跑部分）**阻塞**：实现照做，验收改为**离线桩**
+> （JDK `com.sun.net.httpserver.HttpServer`，因为 `mockwebserver` 不在本地 m2）+ 真实报文样本单测，
+> 实跑标记为用户验收项（同 T112 的处理）。**这不影响 SC-04 与场景 3**：风控拦截是纯本地行为。
+
+| # | 任务 | 对应 spec | 验收 | 状态 |
+|---|---|---|---|---|
+| T301 | `RiskRule` SPI + `RiskContext` + `RiskPipeline`（有序、任一拒绝即短路、PRE_SIZE/POST_SIZE 两阶段，见取舍 11）；`RiskGate` 改为管道宿主，回测行为不变 | RK-01 | 管道顺序/短路/两阶段单测；`mvn -B -o verify` 全绿且 `BacktestSmokeTest` 钉住的数字不变 | ☐ |
+| T302 | `AlphaProperties.Risk`：五层参数 + 每层 `enabled` 开关，声明在**共享** `application.yml`（取舍 13） | RK-09 前置、OP-01 | 绑定单测（缺省值逐条等于 DESIGN §8 表）+ `ShippedConfigurationTest` 扩展「哪个文件声明了它」 | ☐ |
+| T303 | 账户级规则：总杠杆上限（默认 3x）、保证金率下限（默认 150%，定义见取舍 12） | RK-02 | 阈值两侧（恰好等于 / 超出一分）单测 + 变异测试 | ☐ |
+| T304 | 订单级规则：单笔名义价值上限（默认 ≤20% 权益）、价格偏离最新价上限（默认 ≤2%，防乌龙指） | RK-03 | 限价单偏离拦截 + MARKET 单无价格时**跳过偏离检查**的语义单测 | ☐ |
+| T305 | 组合级规则：总持仓名义上限（默认 ≤60% 权益）、单 symbol 上限（默认 ≤30%） | RK-04 | 「本单成交之后」口径的拦截单测（含减仓单永不被这两条拦） | ☐ |
+| T306 | 熔断级：单日亏损达阈值（默认 -5%）当日禁止开仓 + 连亏 N 笔（默认 3）暂停 M 小时（默认 2h）；`CircuitBreaker` 观察 `FillEvent` 与 UTC 日界 | RK-05 | 日界翻转 / 连亏计数 / 暂停到期单测（VirtualClock 定点推进） | ☐ |
+| T307 | 频率级：单位时间最大订单数（默认 ≤10 单/分钟，滑动窗口） | RK-06、SC-04（取舍 14） | 窗口滑动 + 突发拦截 + 窗口过期后恢复单测 | ☐ |
+| T308 | **SC-04 拦截矩阵**：五级规则各 ≥1 条「必被拦截」用例，拦截率 100%，并断言**短路点**（命中的是哪一条 ruleId） | SC-04 | 矩阵测试逐条列 ruleId；逐条删掉每个 guard 必须有用例失败（变异测试） | ☐ |
+| T309 | 持久化契约：`OrderStore` / `RecordStore` 接口（execution / risk 各自定义，零 Spring 零驱动）+ 回测用内存实现 | OP-04、RK-08、EX-01 | 接口编译 + 内存实现 round-trip 单测；红线 grep：alpha-risk/execution 无 jdbc、无 spring | ☐ |
+| T310 | 业务库 DDL（`orders`/`fills`/`signals`/`equity_snapshot`/`positions`/`risk_interceptions`，方言中立、价格与数量存文本，见取舍 15）+ `JdbcOrderStore`（alpha-app） | OP-04、EX-01 | 临时 SQLite 文件 round-trip 单测；建表幂等（重复启动不报错） | ☐ |
+| T311 | `JdbcRecordStore`：signals / risk_interceptions（含命中规则 + 当时账户快照）/ equity_snapshot / positions | RK-08、OP-04 | round-trip 单测 + 「按规则/时间查询拦截记录」单测 | ☐ |
+| T312 | OMS 订单状态机：NEW→SUBMITTED→PARTIALLY_FILLED→FILLED/CANCELED/REJECTED，每次迁移写库 + 发 `OrderUpdateEvent` | EX-01 | 全路径单测（含**非法迁移一律拒绝**：终态不可再迁移） | ☐ |
+| T313 | clientOrderId 幂等 + **边界 6**：区分「交易所拒单」与「交易所不可用」——后者退避重试或留给对账，**绝不判失败** | EX-02、边界 6 | 重复提交不产生重复订单；传输异常不推进状态机的单测 | ☐ |
+| T314 | 成交回报处理：OMS **先写 `Portfolio` 再 publish `FillEvent`**（取舍 16）+ 落库 | EX-06、场景 2 | 部分成交 / 多次成交 / 翻仓的账本与事件序单测 | ☐ |
+| T315 | 精度对齐：启动拉 `exchangeInfo` → 缓存 tickSize/stepSize/minNotional 的 `TradingRulesProvider` 实现 | GW-03 | 脏单被拒测试；T209 的「规则缺失 = CRITICAL 硬停」不被新实现绕过 | ☐ |
+| T316 | Binance 签名 REST：HmacSHA256 + `TimeSync` 偏移 + 下单/撤单/账户/持仓/挂单；**边界 8** 时钟漂移超阈值 → 告警并暂停下单 | EX-03 前置、GW-05、边界 8 | 离线桩：签名与测试内**独立算出**的 HMAC 逐字节相同；漂移守卫单测；密钥只从环境读 | ☐ |
+| T317 | user data stream：`listenKey` 创建 + **30min keepalive** + `ORDER_TRADE_UPDATE` 解析 → `FillEvent`/`OrderUpdateEvent`；REST 查询兜底 | EX-03 | 报文解析单测（真实 testnet 报文样本）+ keepalive 定时单测（VirtualClock）；实跑 ⊘ 需 Key | ☐ |
+| T318 | 定时对账（默认 60s）：挂单 + 持仓 + 账户，以交易所为准修正本地，差异发 `RiskAlertEvent`；启动先全量同步；幽灵仓位**仅告警**（自动平仓属 P4，取舍 18） | EX-04/05、边界 2/7 | 人为制造三类不一致（挂单丢失 / 持仓不符 / 幽灵仓位）均被修正并告警的单测（假网关） | ☐ |
+| T319 | paper/live 装配收口：OMS / 对账定时器 / 持久化 / 网关凭据按 profile 装配，**每个在线 bean 都带 `@Profile({"paper","live"})`**；backtest 与 download 的自动退出不得被破坏 | OP-01、SEC-01 | `PaperProfileApplicationTest`（假网关，容器可启动可关闭）+ 既有两个 profile 容器测试仍绿 | ☐ |
+| T320 | **场景 3 风控硬闸门**端到端（离线）：超限信号被拦、不发往交易所、产生告警事件、拦截记录可查（含命中规则与当时账户状态） | 场景 3、RK-01/08 | 端到端测试用假网关断言 `placeOrder` **从未被调用** + 从库里查回拦截记录 | ☐ |
+| T321 | **场景 2 模拟盘全链路**：testnet 实时行情 → 信号 → 风控 → 下单 → 成交回报 → 持仓/净值更新，且每笔信号/订单/成交可在库中查询 | 场景 2、EX-03/06 | ⚠️ 需 testnet API Key，标记为用户验收项 | ⊘ 阻塞 |
+
+**P3 出口**：T301-T320 全部通过且 `mvn -B -o clean verify` 全绿；spec 场景 3 逐条验收通过；SC-04 拦截率 100%；
+场景 2（T321）由用户在有 testnet Key 的环境执行。
+
+> 设计取舍记录（续 P2 的 1-10）：
+> 11. **风控管道分 PRE_SIZE / POST_SIZE 两阶段，不是一个平面列表。** DESIGN §8 只说「管道串联、任一拒绝即拦截」，
+>    但订单级（单笔名义上限）与组合级（总仓 / 单 symbol 上限）**必须先有数量才能评估**，而数量正是 FR-RK-07 换算出来的。
+>    于是：账户级 / 熔断级 / 频率级在换算**之前**跑（它们只看信号与账户状态，提前短路还省下换算），
+>    订单级 / 组合级在换算**之后**跑，且按「这一单成交之后」的口径评估。把五条规则塞进一个平面管道，
+>    得到的订单级检查会因为 `qty == null` 而恒真（或恒假），而且**没有任何测试能发现**——它会安静地放过每一单。
+> 12. **`marginRatio` 用本系统自己的定义，绝不用交易所那个同名字段。** DESIGN §8 的「保证金率 ≥150%，低于阈值禁止开新仓」
+>    是证券语义：权益 / 占用保证金，**越大越安全**；而 Binance 的 `AccountSnapshot.marginRatio` 是维持保证金 / 保证金余额，
+>    **方向相反**（越大越接近强平）。把网关那个字段直接喂进这条规则，会让「快要爆仓」通过检查、「非常安全」被拦死，
+>    而且两种情况都看起来像正常拒单。故规则自己算：`usedMargin = totalNotional / maxLeverage`，`marginRatio = equity / usedMargin`。
+>    在 `maxLeverage=3x` 时它等价于 `totalNotional ≤ 2×equity`，**比杠杆上限（≤3×equity）更紧** —— 这正是它存在的意义：
+>    把 maxLeverage 调大不会顺手把全部缓冲删掉。交易所的 marginRatio 只进对账告警（T318），永不进这条规则。
+> 13. **风控参数进共享 `application.yml` 的 `alpha.risk.*`，不新建 DESIGN §8 说的 `risk-rules.yml`。**
+>    这是取舍 9 那条理由的第三次应用：回测与实盘必须读到同一套规则（FR-BT-06），而 Spring 只为激活的 profile 加载
+>    `application-<profile>.yml`；再多一个独立文件就多出「哪个文件赢了」的问题，而它的失败现象是
+>    「回测里被拦住的信号，实盘照发」—— 回测因此不再是实盘的证据。热更新（RK-09，P4）不需要独立文件：
+>    改的是内存里的规则集，REST 端点照样能做，且那样才谈得上「不重启」。**与 DESIGN 的文件名不一致，记在此处。**
+> 14. **频率级（RK-06）在 P3 做，尽管 plan §2 把它划给 P4。** SC-04 写的是「覆盖**全部五级规则**的拦截测试用例，
+>    拦截率 100%」，而 P3-2 的验收正是 SC-04；plan §6 的任务文字自己也写着「五级规则实现」，只是 spec 映射列写了 RK-02~05。
+>    少一级就拿不到 SC-04，而这条规则是一个滑动窗口计数器（≤10 单/分钟），成本远低于它换来的验收完整性。
+>    plan §2 与 §6 的这处不一致按「§6 + SC-04」解决。
+> 15. **DESIGN §11 的四张表在 P3 扩成六张。** `orders`/`fills`/`signals`/`equity_snapshot` 之外加 `positions` 与
+>    `risk_interceptions`，因为 spec 直接要求的两件事在四张表里无处可放：FR-RK-08「拦截记录可查询，包含命中的规则与
+>    当时账户状态」（场景 3 的 And 子句）与 EX-04/EX-06 的持仓修正需要一份可查的持仓历史。把拦截塞进 `signals`
+>    会让一张表同时表达「策略想做什么」和「风控不让做什么」两种事实，查询口径只能靠一列 flag 区分。
+>    schema 保持方言中立、价格与数量**存文本**（取舍 5 的同一理由：SQLite 的 NUMERIC 亲和性与 MySQL 的 `DECIMAL`
+>    补零都会破坏逐位复现）；MySQL 集成测试仍留到 P4-8。
+> 16. **OMS 占的正是回测里 `SimulatedExecutor` 的那个位置，并且由它写账本。** paper/live 注册 `OrderManager`、
+>    backtest 注册 `SimulatedExecutor`，两者吃同一个 `OrderRequestEvent`、发同一个 `FillEvent`，链路其余部分一行不改
+>    （FR-BT-06 的第三次兑现：类同构 → 配置同构 → 链路位置同构）。写账本的规则沿用 T215 的结论 ——
+>    **谁确知成交发生，谁就在 publish `FillEvent` 之前把成交写进 `Portfolio`**：这样「账本 handler 必须排在策略之前」
+>    这条隐式注册顺序约束根本不存在，且策略 `onFill` 看到的持仓就是这笔成交造成的。
+> 17. **出厂默认值必须自洽：`targetExposure` 与「单笔 ≤20% 权益」是耦合的，耦合式是 `单笔上限 ≥ 2 × targetExposure`。**
+>    翻仓那一单的数量是目标仓位的两倍，所以任何 flip 的名义都是 `2 × targetExposure × equity`；
+>    而 `PositionSizer.Policy.DEFAULT` 现在是 0.30 —— 配上 DESIGN 的 20% 上限，**所有翻仓、以及所有从空仓建到 30% 的单
+>    都会被订单级规则拦掉**。规则没错，错的是两个默认值放在一起不成立（P2 没有订单级规则，所以这个矛盾一直不可见）。
+>    P3 落地时把出厂 `targetExposure` 降到 **0.10**（上限 0.20 恰好容纳一次翻仓），并在 `application.yml` 注释里写明这条不等式。
+>    **`BacktestSmokeTest` 必须显式声明一套不咬人的风控参数**：它钉的是数据集 + 策略 + 撮合的确定性，不是风控默认值，
+>    让它继承出厂风控参数等于把两件事的变更绑在一起。若钉住的数字仍然变了，按 `PROVENANCE.md` 在同一个提交里重新测量。
+> 18. **两处"P3 只做一半"是刻意的，不是遗漏。** ①RK-08 的「推送通知」在 P3 只到**事件 + 落库 + 日志**为止：
+>    邮件通道是 P4-1（JavaMailSender + QQ SMTP，需要 SMTP 授权码，当前阻塞）。P4 接上推送时不需要改风控层一行。
+>    ②EX-05 幽灵仓位在 P3 **只告警不平仓**（plan 把自动平仓划给 P4-5）：自动平仓是一个会自己下单的行为，
+>    在没有 7 天浸泡证据之前，不该跟对账同一个 PR 落地 —— 对账判错一次，代价就是一笔真实的反向单。
+
+---
+
 ## 执行日志
 
 | 时间 | 任务 | 结果 |
@@ -172,3 +254,4 @@ SC-02 见 T220/T221（同输入三次逐位一致，且 26k 根上三个独立 J
 | 2026-09-10 02:45 | T220（CI 回测冒烟：提交 2400 根真实数据集 + `BacktestSmokeTest` 4 个用例 + `BacktestSmokeFixtureTest` 按需再生成 + `PROVENANCE.md`） | 通过：新增 5 个测试，全仓 **304→309 全绿**（2 个跳过 = 两个按需联网测试：夹具再生成与 testnet 下载）。**SC-02 有了实物证据**：同一份输入连跑三次（每次 **重建** `BacktestWiring`，因为 `Strategy` 跨 bar 带状态，重跑同一个 runner 是往预热过的策略里再灌一遍数据），`metrics()`/`curve()`/`trades()`/`fills()`/`funding()` 五个记录全等 **且 HTML 逐字节相同**，surefire 计时 **0.423s**（三次 2400 根回放的总和）—— 这也是 SC-01 的早期信号：26k 根按此外推约 4.6s 回放。**数据集是真实抓来的、不是编的**：走真正的 `BinanceKlineDownloader → CsvKlineRepository` 路径从 `testnet.binancefuture.com` 拉 2024-01-01T00:00:00Z 至 2024-04-09T23:00:00Z 的 BTCUSDT 1h，**2 次请求（真的翻页了）**、`skippedForming=0`，落盘 **174917 字节**、sha256 `992672de066e55114cf8112681c88174a1b4264425cf2852f4dc020844ec61a5`；再生成测试顺带证明幂等（**第二次同区间下载 stored=0**）。一个 testnet 的细节记在 `PROVENANCE.md` 里：**它拒绝 `BTCUSDT.PERP` 这个符号**，抓取时按 `BTCUSDT` 请求、落盘时按统一符号命名，否则再生成会静默产出空目录。**钉住的黄金值（实测得来，第一稿里那些编的数全被换掉了）**：`totalReturn -0.13417588`、`maxDrawdown 0.15788502`、`finalEquity 8658.24122746`、`totalFees 338.75374834`、`fundingTotal 10.59291420`、`fills 123`、`closedTrades 122`、`openTrades 1`、`wins 32`、`losses 90`。**基线是亏损的，这件事写在类注释里而不是藏起来**：绿灯说的是「管道没变」，**完全不代表 MA 双均线值得跑**（100 天小时线、扣 taker 费+滑点+资金费后 26% 胜率，正是一个趋势跟踪策略在震荡窗口里的样子）——策略好坏是读报告的人的判断，不是 CI 的。**年化按取舍 8 只报不断**：实测 `-0.4089580146693411`；`winRate 0.26229508196721313` 与 `sharpe -1.7422310888491224` 打印但也不单独钉 —— 前者是 `wins/closedTrades`（两个都已钉），后者由净值曲线推出（曲线在确定性用例里已逐位比对），再钉一遍只是给同一批输入多两个必须同步修改的字符串。**数据集自检用一条网格断言**：`bars.get(i).openTime() == FROM + i*HOUR` 对 2400 个 i 成立，一句话同时蕴含了条数、顺序、端点与**无空洞**；另外单列 `gaps()` 为空，因为 committed 数据集里出现一个洞不会响亮地失败，只会让每个黄金值移动一个看起来像策略 bug 的量。**变异测试 14 个，杀掉 13 个**，且刻意瞄准**链路**而不是装配（装配已由 T219 的 26 个覆盖）：mark 价改用开盘、成交价改用收盘（未来函数）、CEILING/FLOOR 互换、手续费按开盘价算、taker 费率 0.0005→0.00045、回撤峰值不更新、总收益漏减 1、金叉守卫删除、信号强度 1.0→0.5、目标敞口 0.30→0.31、CSV 解析改走 double、CSV 排序反转、以及**唯一一个只为 SC-02 而设的变异体**（HTML 里多打一行 `Instant.now()`/`System.nanoTime()` —— 它被三次逐字节比对杀掉，证明那条断言真的在看守「墙上时间不得进被比对的产物」）。**唯一存活的 M3（把 `slipOfLastBar.put` 移到 `fillPending` 之前）经查是等价变异体，不是漏测**：该 map 的唯一读点在 `onOrderRequest`（存进 `Pending` 后 `fill` 只读 `Pending.slippageBps()`，`fillPending` 从不碰 map），而 `EventEngine.publish` 是 `externalQueue.offer(event)` —— **入队，不是重入分发**，所以 `onKline` 执行期间没有任何订单能被下。这个重入问题是值得查的（`Strategy.onFill` 确实存在且确实能发单），但从 `onFill` 发出的 `OrderRequestEvent` 同样排在 `onKline` 之后才被消费，因此 put 相对 `fillPending` 的位置**对任何策略都不可观测**。**推论是原注释说的是错的理由**（「Recorded after the fill: 后下的单落进这根 bar…」），已改写为真正的不变量：*在本 handler 返回之前记录，这才是「用这根 bar 的振幅」成立的原因*。**夹具解析走 classloader（`getResource().toURI()`）而不是 `src/test/resources/...`**：冒烟测试是唯一一个不许依赖工作目录的测试，在某种 IDE 运行配置下报「数据集找不到」会教会人去忽略冒烟测试。 |
 | 2026-09-10 03:12 | T223（补：历史数据下载入口 `download` profile + `AlphaProperties.Download` + 抽出 `DataPlan` + `application-download.yml`） | 通过：新增 22 个单测（app 36→58，全仓 309→**331** 全绿，2 个跳过 = 两条按需联网测试），并**手工跑通打包产物**：`java -jar … --spring.profiles.active=download --alpha.download.from=2023-09-10T00:00:00Z --alpha.download.to=2026-09-09T00:00:00Z` → **EXIT 0**、墙上 8s、**18 次请求**（真的翻页了）、**26281 根 fetched/stored、0 根因未收盘被丢**，落盘 `data/klines/BTCUSDT.PERP-1h.csv`（1934662 字节，sha256 `b4484e26…b94584`，gitignored 不提交）；**紧接着同区间重跑 stored=0** —— 幂等，这也是「我的库是不是最新」这个问题唯一诚实的答法。**补这条任务的原因是产品缺口而不是任务缺口**：FR-BT-05 要的是一个*工具*，而 T212 的 `BinanceKlineDownloader` 只有 JUnit 能调到，`application-backtest.yml` 却把 `csv-dir` 注释成「下载器写进来的目录」—— 没有任何东西往里写，SC-01 也只有写过一次性 harness 的人能复现。**验收时查出一个真实隐患（已修）**：`alpha.backtest.data` 原先只声明在 `application-backtest.yml`，而 **Spring 只为激活的 profile 加载 `application-<profile>.yml`**，download profile 根本不读那个文件 —— 它落到 `AlphaProperties.Backtest.Data` 的 record 默认值 `data/klines`，**与回测一致纯属出厂值恰好相同**。操作员一旦把 `csv-dir` 改成别的路径，就会得到「下载成功、回测说没数据」，正是取舍 9 声称不可能发生的那个现象。修法是把 `data` 块搬进**共享的 `application.yml`**（取舍 6 的同一原则：它不是回测专属旋钮，是两个模式共用的存储），并加 `ShippedConfigurationTest`（3 个用例，**不起容器**，用 `YamlPropertySourceLoader` 直接问「哪个文件声明了什么」）。**断言的是「已声明」而不是「绑定后的值」**：record 默认值与出厂值同为 `data/klines`，绑定结果在「文件里写了」与「回落默认」两种情况下不可区分，所以必须问 property source 本身；另两个用例分别断言两个 profile 文件**各自单独加载时都查不到这个 key**（与共享文件一起加载时，重复声明同一个目录是不可见的），以及两个 profile 解析出同一个 store。变异体 D21（从 `application.yml` 删掉 data 块）与 D22（塞回 `application-backtest.yml` 且改成 `/mnt/klines`）都被杀掉。**离线验收用 JDK 自带的 `com.sun.net.httpserver.HttpServer` 做 stub**（`mockwebserver` 不在本地 m2 而构建是离线的）：它记录每个查询、**只服务落在请求窗口内的 bar**，于是「区间被换掉或截断」表现为 bar 变少而不是被静默接受；需要失败时用 `failWith(400)` 而不是关掉的 socket —— 连接错误会被下载器按 5 次指数退避重试，一条断言会变成 15 秒。**`settings()` 与 `release()` 都做成 package-private static**，理由写在 Javadoc：否则「testnet/live 映射」与「释放到底做了什么」都只有联网才测得到。**容器测试断言 download profile 下没有 `EventEngine`/`StrategyEngine`/`ExchangeGateway`/`BacktestWiring` 四个 bean、恰好一个 `DownloadWiring`、JVM 里没有名为 `event-engine` 的存活非守护线程** —— 与 T219 同一套结构性论证（承重墙是 profile 限制，拆掉它只有能启动容器的测试看得见）。**变异测试 22 个杀掉 21 个**：三处拒绝、testnet/live 两向、空 base-url 当成有值、override 顺手重置退避预算、序列方向反转 / 全局周期被忽略 / 显式列表变成追加、写到别的目录、区间互换、db→csv 回落、未知 source 回落、SQLite 校验删除、`@Profile("download")` 拆除、`symbol.binance()`→`unified()`、连接池不 evict、dispatcher 不 shutdown，加上面两个 yml 变异体。**唯一存活的 D11（`download()` 不调用 `release()`）经查是不可观测，不是漏测**，判定**靠实测而不是推断**：先加一条直接钉 `release()` 的用例（发一次真请求 → 断言连接池非空且 executor 未 shutdown → 调 `release` → 断言池空且 `isShutdown()`），D12/D13 因此被杀；再写一次性探针采样 10×100ms，发现 **`OkHttp TaskRunner` 是守护线程且是 JVM 级单例，释放之后照样 TIMED_WAITING 活着**，released 与 unreleased 的线程集合完全相同，唯一差别是池里那条连接（unreleased `pool=1`），而那个 client 在 `download()` 里创建并丢弃、外部拿不到。把 client 注入进来只为可测性，等于把 HTTP client 塞进装配的公开契约，不划算 —— 结论写进 `release()` 的 Javadoc（「删掉这个 finally 之前先知道它挡的是什么：工具已经打印 complete 之后还攥着一条 socket 和一个清理任务」），不假装有测试钉住。**变异脚本的新陷阱**：D11 第一版的替换文本调用了一个不存在的方法，而**编译失败的变异体不算被杀**（构建失败会被记成 KILLED，理由却是错的），已改成编译通过的 `if (series.isEmpty())` 守卫 —— 写变异体时先问一句「这个改动能编译吗」。 |
 | 2026-09-10 03:18 | T221（SC-01 性能验收：BTCUSDT 1h 近三年完整回测 + 报告） | **达标，余量是两个数量级**。数据集 = 用 T223 的 download profile 从 testnet 拉的 **26281 根**（2023-09-10T00:00:00Z → 2026-09-09T00:00:00Z，1095 天 × 24 + 1，sha256 `b4484e26…b94584`，1.9MB，放 gitignored 的 `data/klines`、**不提交**）。跑法就是操作员的跑法（`mvn -B -o package -DskipTests` 之后两条 `java -jar`），**实测：回放 425ms（feeder 自报 `PT0.425222083S`）、整个 JVM 墙上 1.379s（含 Spring 启动 0.575s、CSV 解析、958962 字节 HTML 落盘）、EXIT 0**，而预算是 **5 分钟**（≈218 倍余量）。`Backtest done: bars=26281, orders passed=1154, filled=1154, rejected=0, still pending=0, equity samples=26281`；**0 处缺口** —— testnet 三年小时线是完整的，所以这份计时既不含缺口处理的开销，也不需要它。**顺手把 SC-02 在 26k 根上又验了一遍，而且比 T220 更强**：三个**独立 JVM 进程**（默认、`report-dir` 换到 /tmp、`journal=true`）产出的 HTML **sha256 完全相同**（`f6946261…1ec52d`）。T220 钉的是同一进程内三次运行逐位一致，这里证明的是**跨进程、跨 journal 开关**也一致，即墙上时间与 journal 都没进被比对的产物。**测出一条与注释不符的事实并改了注释**：`application-backtest.yml` 原先说 journal 默认关是因为「三年小时线每根数个事件，写它们会与 SC-01 的 5 分钟竞争」；实测 `journal=true` 是 **746ms 回放 / 1.758s 墙上 / `events.jsonl` 8274642 字节**，即只 **+0.3s**，对 5 分钟毫无威胁 —— 真正的代价是那次运行多出一个 8.3MB 的产物。注释已换成实测数字与真正的理由（按 T220 的 M3 先例：**测量与注释冲突时，按测量改注释**）。**刻意不加 CI 计时断言**（沿用 T220 的判断）：一条「< 5 分钟」的断言在慢 CI 上只会变成抖动源，而 SC-01 的验收标准本来就是「实测计时记录在执行日志」；**可复现性由 T223 保证**（两条命令 + 数据集 sha256），不靠把 1.9MB 塞进仓库。**结果本身照旧不是策略评价**：权益 10000 → 2007.81680474（**-79.92%**）、最大回撤 81.25%、夏普 -1.947、年化 -41.4424%、1153 笔已平 + 1 笔未平、胜率 26.71%、盈亏比 0.5636、手续费 1741.54443593、资金费 39.87562933 —— MA(10,30) 在三年小时线上扣掉 taker 费 + 滑点 + 资金费后是稳定亏损的，与 T220 那条 100 天亏损基线同方向、只是窗口更长。SC-01 说的是「跑得完」，不是「值得跑」。 |
+| 2026-09-10 03:25 | P3 细化 | 生成 **T301-T321**（21 条，其中 T321 阻塞）。细化时查出并解决了 5 处上游文档之间/与既有实现之间的矛盾，全部记进取舍 11-18 而不是就地拍板：①DESIGN §8 的「平面管道」装不下订单级/组合级规则（它们要数量，数量是 RK-07 换算出来的）→ 两阶段管道；②DESIGN 的 `marginRatio≥150%` 与 Binance 同名指标**方向相反**，直接对接会让快爆仓的单通过检查 → 规则自算，交易所那个字段只进对账；③DESIGN 说规则放 `risk-rules.yml`，但取舍 9 已证明「profile 专属文件 + 回测实盘必须同值」是陷阱 → 放共享 `application.yml`；④plan §2 把频率级划给 P4，而 P3-2 的验收 SC-04 要求「全部五级」→ 按 §6+SC-04 在 P3 做；⑤DESIGN §11 的四张表放不下 FR-RK-08 的拦截记录与持仓历史 → 扩成六张。另查出**一处 P2 遗留的默认值矛盾**（取舍 17）：`targetExposure=0.30` 配上 DESIGN 的「单笔 ≤20% 权益」会拦掉所有翻仓与所有建仓到 30% 的单 —— P2 没有订单级规则所以从未暴露；耦合式 `单笔上限 ≥ 2 × targetExposure` 写进 yml 注释，出厂敞口降到 0.10。阻塞项：T321（场景 2 testnet 全链路）与 T316-T318 的实跑部分需要 API Key，验收改为离线桩 + 真实报文样本单测，实跑留作用户验收项（同 T112）。 |
