@@ -44,6 +44,12 @@ public final class EventEngine implements AutoCloseable {
     private final Thread loopThread;
     private volatile boolean running;
 
+    /** Guards {@link #completedThrough} and {@link #dispatching}; waiters block on it. */
+    private final Object quiescenceLock = new Object();
+    /** Highest event id whose round has finished. Event ids are globally monotonic. */
+    private long completedThrough;
+    private boolean dispatching;
+
     public EventEngine(EventJournal journal, Clock clock) {
         this.journal = journal;
         this.clock = clock;
@@ -100,6 +106,11 @@ public final class EventEngine implements AutoCloseable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+        synchronized (quiescenceLock) {
+            // Release replay drivers blocked in awaitQuiescence: the loop is gone, so
+            // nothing will ever make them quiescent.
+            quiescenceLock.notifyAll();
+        }
         journal.close();
         log.info("EventEngine stopped");
     }
@@ -113,6 +124,68 @@ public final class EventEngine implements AutoCloseable {
         return running && loopThread.isAlive();
     }
 
+    // ------------------------------------------------------- replay barrier
+
+    /** Default bound for {@link #awaitQuiescence(long)}; a replay round is microseconds. */
+    public static final Duration DEFAULT_QUIESCENCE_TIMEOUT = Duration.ofSeconds(30);
+
+    /** Caps a single wait so state changed off the loop thread is still noticed. */
+    private static final long QUIESCENCE_POLL_MILLIS = 10L;
+
+    /**
+     * Blocks until the round for {@code eventId} has closed and the engine has nothing
+     * left to do at the current clock reading.
+     *
+     * <p>This exists for replay drivers. A feeder that advances the {@code VirtualClock}
+     * while the bar it just published is still working through signal -&gt; risk -&gt; order
+     * -&gt; fill would let the next bar's events interleave with this bar's cascade: the
+     * run stops being reproducible (NFR-04) and handlers can observe a clock that jumped
+     * underneath them. Waiting per bar makes "one bar == one closed round" exact.
+     *
+     * <p>Quiescent means: the round for {@code eventId} finished, no round is in flight,
+     * the cascade and external queues are empty, and no timer is due. The timer clause
+     * matters because recurring settlement (e.g. funding) is driven by timers that become
+     * due exactly when the feeder moves the clock.
+     *
+     * <p>Only meaningful against a {@code VirtualClock}, which advances solely when the
+     * caller advances it. Against a wall clock "no timer due" is not a stable condition.
+     *
+     * @param eventId the {@link Event#eventId()} the caller published before calling
+     * @return {@code true} if quiescent within the timeout; {@code false} on timeout or if
+     *         the engine is stopped - a {@code false} must abort the replay, never be ignored
+     */
+    public boolean awaitQuiescence(long eventId) throws InterruptedException {
+        return awaitQuiescence(eventId, DEFAULT_QUIESCENCE_TIMEOUT);
+    }
+
+    /** @see #awaitQuiescence(long) */
+    public boolean awaitQuiescence(long eventId, Duration timeout) throws InterruptedException {
+        long deadlineNanos = System.nanoTime() + timeout.toNanos();
+        synchronized (quiescenceLock) {
+            while (running) {
+                if (completedThrough >= eventId && isIdle()) {
+                    return true;
+                }
+                // Round up: truncating would give up before the deadline, and wait(0) means forever.
+                long remainingMillis = (deadlineNanos - System.nanoTime() + 999_999L) / 1_000_000L;
+                if (remainingMillis <= 0) {
+                    return false;
+                }
+                // Bounded wait: queue/clock changes made off the loop thread do not notify.
+                quiescenceLock.wait(Math.min(remainingMillis, QUIESCENCE_POLL_MILLIS));
+            }
+            return false;
+        }
+    }
+
+    /**
+     * Caller must hold {@link #quiescenceLock}. No cascade check: {@link #dispatching}
+     * spans the whole round, and a round is defined to include its cascade closure.
+     */
+    private boolean isIdle() {
+        return !dispatching && externalQueue.isEmpty() && millisUntilNextTimer() > 0;
+    }
+
     // ------------------------------------------------------------------ loop
 
     private void runLoop() {
@@ -122,7 +195,6 @@ public final class EventEngine implements AutoCloseable {
                 if (event != null) {
                     dispatchRound(event);
                 }
-                emitDueTimers();
             } catch (InterruptedException e) {
                 // Woken by wakeLoop() (new timer scheduled) or stop() (running=false
                 // ends the loop). Either way: just re-evaluate.
@@ -130,23 +202,46 @@ public final class EventEngine implements AutoCloseable {
                 // A buggy handler must never kill the engine loop.
                 log.error("Unhandled error in event loop", e);
             }
+            // Outside the catch: a wake-up must re-evaluate timers, not skip straight
+            // back to polling.
+            try {
+                emitDueTimers();
+            } catch (Exception e) {
+                log.error("Unhandled error while emitting timers", e);
+            }
         }
     }
 
+    /**
+     * Caps how long the loop parks. Deadlines are read from the {@link Clock}, and a
+     * {@code VirtualClock} only moves when the replay driver moves it: parking until the
+     * next deadline would park for hours of wall time right after the driver jumped the
+     * clock, leaving an already-due timer unfired. Re-checking often is free - the poll
+     * returns the moment an event arrives.
+     */
+    private static final long MAX_PARK_MILLIS = 20L;
+
     private Event pollNext() throws InterruptedException {
-        long waitMs = millisUntilNextTimer();
-        if (waitMs == Long.MAX_VALUE) {
-            return externalQueue.take();
-        }
+        long waitMs = Math.min(millisUntilNextTimer(), MAX_PARK_MILLIS);
         return externalQueue.poll(Math.max(waitMs, 1L), TimeUnit.MILLISECONDS);
     }
 
     /** Dispatch one event plus its entire cascade closure within this round. */
     private void dispatchRound(Event event) {
-        dispatch(event);
-        Event next;
-        while ((next = cascade.poll()) != null) {
-            dispatch(next);
+        synchronized (quiescenceLock) {
+            dispatching = true;
+        }
+        try {
+            dispatch(event);
+            Event next;
+            while ((next = cascade.poll()) != null) {
+                dispatch(next);
+            }
+        } finally {
+            synchronized (quiescenceLock) {
+                dispatching = false;
+                quiescenceLock.notifyAll();
+            }
         }
     }
 
@@ -157,6 +252,11 @@ public final class EventEngine implements AutoCloseable {
                 handler.onEvent(event, cascade::add);
             } catch (Exception e) {
                 log.error("Handler {} failed on {}", handler.getClass().getSimpleName(), event, e);
+            }
+        }
+        synchronized (quiescenceLock) {
+            if (event.eventId() > completedThrough) {
+                completedThrough = event.eventId();
             }
         }
     }
