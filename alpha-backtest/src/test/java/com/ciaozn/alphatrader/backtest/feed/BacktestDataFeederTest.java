@@ -2,6 +2,8 @@ package com.ciaozn.alphatrader.backtest.feed;
 
 import com.ciaozn.alphatrader.common.data.KlineRepository;
 import com.ciaozn.alphatrader.common.event.KlineEvent;
+import com.ciaozn.alphatrader.common.event.SignalEvent;
+import com.ciaozn.alphatrader.common.model.Direction;
 import com.ciaozn.alphatrader.common.model.Interval;
 import com.ciaozn.alphatrader.common.model.Kline;
 import com.ciaozn.alphatrader.common.model.Symbol;
@@ -286,7 +288,9 @@ class BacktestDataFeederTest {
             await(release);
         });
         engine.start();
-        BacktestDataFeeder feeder = new BacktestDataFeeder(engine, clock, Duration.ofMillis(150));
+        List<Long> closedRounds = new CopyOnWriteArrayList<>();
+        BacktestDataFeeder feeder = new BacktestDataFeeder(engine, clock, Duration.ofMillis(150),
+                closedRounds::add);
 
         assertThatThrownBy(() -> feeder.replay(repository, List.of(series(BTC)), T0, T0 + 4 * HOUR))
                 .isInstanceOf(IllegalStateException.class)
@@ -297,7 +301,49 @@ class BacktestDataFeederTest {
         // exactly one: the feeder gave up on the first bar instead of queueing the other four
         // behind a round that was never going to close
         assertThat(handlerEntries).hasValue(1);
+        // a bar whose cascade never finished must not be reported as closed, or an equity
+        // sampler would record a half-applied round as that bar's result
+        assertThat(closedRounds).isEmpty();
         release.countDown();
+    }
+
+    @Test
+    void theRoundListenerSeesEachBarOnlyAfterItsWholeCascadeHasClosed() {
+        repository.put(BTC, Interval.H1, bars(T0, 3, "30000."));
+        List<String> order = new CopyOnWriteArrayList<>();
+        List<Long> closedRounds = new CopyOnWriteArrayList<>();
+        VirtualClock replayClock = clock;
+        EventEngine engine = newEngine(replayClock);
+        // one cascade step: each bar produces a signal, so "round closed" is observably later
+        // than "the bar was handled"
+        engine.registerHandler((event, publisher) -> {
+            if (event instanceof KlineEvent kline) {
+                order.add("kline:" + kline.timestamp());
+                publisher.publish(SignalEvent.of("test", BTC, Direction.LONG, 1.0, "cascade",
+                        kline.timestamp()));
+            } else if (event instanceof SignalEvent signal) {
+                order.add("signal:" + signal.timestamp());
+            }
+        });
+        engine.start();
+        BacktestDataFeeder feeder = new BacktestDataFeeder(engine, replayClock, Duration.ofSeconds(5),
+                businessTs -> {
+                    closedRounds.add(businessTs);
+                    order.add("round-closed:" + businessTs);
+                });
+
+        feeder.replay(repository, List.of(series(BTC)), T0, T0 + 2 * HOUR);
+
+        assertThat(closedRounds).containsExactly(T0 + HOUR - 1, T0 + 2 * HOUR - 1, T0 + 3 * HOUR - 1);
+        // this ordering is the reason the seam exists: a handler cannot express "after the
+        // cascade", so anything sampled here is exact by construction rather than by being
+        // registered last
+        assertThat(order).containsExactly(
+                "kline:" + (T0 + HOUR - 1), "signal:" + (T0 + HOUR - 1), "round-closed:" + (T0 + HOUR - 1),
+                "kline:" + (T0 + 2 * HOUR - 1), "signal:" + (T0 + 2 * HOUR - 1),
+                "round-closed:" + (T0 + 2 * HOUR - 1),
+                "kline:" + (T0 + 3 * HOUR - 1), "signal:" + (T0 + 3 * HOUR - 1),
+                "round-closed:" + (T0 + 3 * HOUR - 1));
     }
 
     @Test

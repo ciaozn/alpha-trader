@@ -39,6 +39,7 @@ public final class BacktestDataFeeder {
     private final EventEngine engine;
     private final VirtualClock clock;
     private final Duration quiescenceTimeout;
+    private final RoundListener roundListener;
 
     /**
      * @param quiescenceTimeout how long to wait for one bar's round to close. A replay
@@ -46,12 +47,37 @@ public final class BacktestDataFeeder {
      *                          meant to be exceeded only by a deadlocked handler.
      */
     public BacktestDataFeeder(EventEngine engine, VirtualClock clock, Duration quiescenceTimeout) {
+        this(engine, clock, quiescenceTimeout, businessTs -> {
+        });
+    }
+
+    public BacktestDataFeeder(EventEngine engine, VirtualClock clock, Duration quiescenceTimeout,
+                              RoundListener roundListener) {
         if (quiescenceTimeout.isZero() || quiescenceTimeout.isNegative()) {
             throw new IllegalArgumentException("quiescenceTimeout must be positive: " + quiescenceTimeout);
         }
         this.engine = engine;
         this.clock = clock;
         this.quiescenceTimeout = quiescenceTimeout;
+        this.roundListener = roundListener;
+    }
+
+    /**
+     * Observes the replay from the one point where a whole round is known to be closed.
+     *
+     * <p>This is deliberately not an {@link com.ciaozn.alphatrader.engine.EventHandler}: "after
+     * this bar's signal -&gt; risk -&gt; order -&gt; fill cascade has finished" cannot be expressed by
+     * handler registration order, and anything that needs it - sampling the equity curve above
+     * all - would otherwise depend on being registered last and stay silently wrong the day
+     * someone registers one more handler. Here it is exact by construction and costs nothing.
+     */
+    @FunctionalInterface
+    public interface RoundListener {
+
+        /**
+         * @param businessTs the close time of the bar whose round just finished
+         */
+        void afterRound(long businessTs);
     }
 
     /** One symbol/interval pair to replay. */
@@ -130,6 +156,7 @@ public final class BacktestDataFeeder {
                     bar.kline(), true, businessTs);
             advanceAndPublish(businessTs, event);
             awaitRound(event, bar);
+            roundListener.afterRound(businessTs);
             if (replayed == 0) {
                 firstBusinessTs = businessTs;
             }
