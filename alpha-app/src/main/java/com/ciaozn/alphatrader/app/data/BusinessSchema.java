@@ -25,14 +25,29 @@ import java.util.List;
  * auto-increment, whose spelling is {@code AUTOINCREMENT} on one and {@code AUTO_INCREMENT} on the
  * other. Ordering columns are therefore allocated by the stores, not by the database.
  *
- * <p><b>Prices, quantities and money are {@code VARCHAR}, never {@code DECIMAL} or {@code REAL}</b>
- * (取舍 5, restated by 取舍 15 for these tables). SQLite's NUMERIC affinity turns {@code '68000.10'}
- * into a double and MySQL's {@code DECIMAL(24,8)} rescales it to {@code 68000.10000000}, so either
- * choice makes the number a backtest replays differ from the number the exchange sent - silently,
- * and in exactly the values SC-02 compares bit for bit. No statement here does arithmetic on those
- * columns, so text costs nothing. {@code strength} is the one exception: it is not money, and an
- * 8-byte IEEE double is the same value on both dialects and in the domain model that produced it,
- * so there is nothing for a column type to normalize.
+ * <p><b>Prices, quantities, money and signal strength are {@code VARCHAR}, never {@code DECIMAL},
+ * {@code REAL} or {@code DOUBLE}</b> (取舍 5, restated by 取舍 15 for these tables). SQLite's NUMERIC
+ * affinity turns {@code '68000.10'} into a double and MySQL's {@code DECIMAL(24,8)} rescales it to
+ * {@code 68000.10000000}, so either choice makes the number a backtest replays differ from the
+ * number the exchange sent - silently, and in exactly the values SC-02 compares bit for bit. No
+ * statement here does arithmetic on those columns, so text costs nothing.
+ *
+ * <p>{@code strength} shipped first as {@code DOUBLE}, on the argument that a double is not money and
+ * an 8-byte IEEE value is the same on both dialects. Reverted, that column loses {@code -0.0}, which
+ * SQLite's REAL affinity hands back as {@code 0.0} - the normalization 取舍 5 exists to avoid, in the
+ * one column nobody would think to check. As text it round-trips NaN, both infinities, {@code -0.0}
+ * and subnormals bit for bit, and stays readable in a SQL client.
+ *
+ * <p><b>The column type is only half of it, and the two halves fail separately</b> - which is worth
+ * stating because each one looks sufficient on its own. {@code strength} must also be <em>bound</em>
+ * as text, as both stores do: bound with {@code setDouble}, a NaN reaches the driver as NULL and any
+ * {@code NOT NULL} column rejects it with {@code SQLITE_CONSTRAINT_NOTNULL}, text or double. A NaN
+ * strength is precisely what {@code PositionSizer.RULE_STRENGTH} refuses, so that would make the
+ * interception record most worth keeping the one that cannot be written, and would throw out of the
+ * gate onto the engine thread. The other direction is quieter and is why the column type still has to
+ * be right: a text binding into a {@code DOUBLE} column lets NaN through by accident, because SQLite
+ * cannot convert {@code "NaN"} to a number and stores the text instead.
+ * {@code JdbcRecordStoreTest} pins each half by reverting the other.
  *
  * <p><b>{@code VARCHAR} widths are documentation on SQLite and a constraint on MySQL</b>, which
  * ignores and enforces them respectively. Everything written into the wide text columns
@@ -98,7 +113,7 @@ final class BusinessSchema {
               strategy_id VARCHAR(64)  NOT NULL,
               symbol      VARCHAR(32)  NOT NULL,
               direction   VARCHAR(8)   NOT NULL,
-              strength    DOUBLE       NOT NULL,
+              strength    VARCHAR(32)  NOT NULL,
               reason      VARCHAR(512) NOT NULL,
               PRIMARY KEY (seq)
             )""";
@@ -161,7 +176,7 @@ final class BusinessSchema {
               strategy_id     VARCHAR(64)  NOT NULL,
               symbol          VARCHAR(32)  NOT NULL,
               direction       VARCHAR(8)   NOT NULL,
-              strength        DOUBLE       NOT NULL,
+              strength        VARCHAR(32)  NOT NULL,
               reason          VARCHAR(512) NOT NULL,
               equity          VARCHAR(64)  NOT NULL,
               cash            VARCHAR(64)  NOT NULL,
@@ -172,8 +187,45 @@ final class BusinessSchema {
               PRIMARY KEY (seq)
             )""";
 
+    /**
+     * One index per column a read filters or ranges on. All five history tables are append-only and
+     * grow for the whole life of a run, which {@code InMemoryRecordStore} names as the reason it is a
+     * test double rather than the implementation; {@code orders} and {@code fills} are indexed too,
+     * because {@code findOpen()} is what the FR-EX-04 reconciliation timer calls every 60 seconds and
+     * {@code fills(client_order_id)} is called on every execution.
+     *
+     * <p>A range on {@code business_ts} cannot ride the {@code seq} primary key even though the two
+     * usually agree: they diverge exactly when a fact arrives late, which is the case FR-EX-04 exists
+     * to handle. None of these are UNIQUE - every signal on one bar shares a timestamp, and a unique
+     * index here would turn a normal run into a constraint failure.
+     */
+    private static final String IDX_SIGNALS_TS =
+            "CREATE INDEX IF NOT EXISTS idx_signals_business_ts ON signals (business_ts)";
+
+    private static final String IDX_INTERCEPTIONS_RULE =
+            "CREATE INDEX IF NOT EXISTS idx_interceptions_rule_id ON risk_interceptions (rule_id)";
+
+    private static final String IDX_INTERCEPTIONS_TS =
+            "CREATE INDEX IF NOT EXISTS idx_interceptions_business_ts ON risk_interceptions (business_ts)";
+
+    private static final String IDX_EQUITY_TS =
+            "CREATE INDEX IF NOT EXISTS idx_equity_business_ts ON equity_snapshot (business_ts)";
+
+    private static final String IDX_POSITIONS_TS =
+            "CREATE INDEX IF NOT EXISTS idx_positions_business_ts ON positions (business_ts)";
+
+    private static final String IDX_FILLS_ORDER =
+            "CREATE INDEX IF NOT EXISTS idx_fills_client_order_id ON fills (client_order_id)";
+
+    private static final String IDX_ORDERS_STATUS =
+            "CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (order_status)";
+
     private static final List<String> STATEMENTS =
             List.of(ORDERS, FILLS, SIGNALS, EQUITY_SNAPSHOT, POSITIONS, RISK_INTERCEPTIONS);
+
+    private static final List<String> INDEXES = List.of(IDX_ORDERS_STATUS, IDX_FILLS_ORDER,
+            IDX_SIGNALS_TS, IDX_INTERCEPTIONS_RULE, IDX_INTERCEPTIONS_TS, IDX_EQUITY_TS,
+            IDX_POSITIONS_TS);
 
     private BusinessSchema() {
     }
@@ -184,9 +236,12 @@ final class BusinessSchema {
             for (String create : STATEMENTS) {
                 statement.execute(create);
             }
+            for (String index : INDEXES) {
+                statement.execute(index);
+            }
         } catch (SQLException e) {
             throw new IllegalStateException("Business schema failure while creating the six tables of "
-                    + "DESIGN §11 (sqlState " + e.getSQLState() + ")", e);
+                    + "DESIGN §11 and their indexes (sqlState " + e.getSQLState() + ")", e);
         }
     }
 }
