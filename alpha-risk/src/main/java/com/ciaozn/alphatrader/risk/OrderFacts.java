@@ -18,17 +18,35 @@ import java.math.BigDecimal;
  * anything the system actually sends - it would be a rule that looks configured and never runs.
  * The estimate is conservative in the sense that matters: it is the same price the sizer used to
  * produce the quantity.
+ *
+ * <p>{@code limitPrice} is the candidate order's <em>own</em> price, or {@code null} for a MARKET
+ * order, which has no price - it executes at the touch. It exists solely for FR-RK-03's fat-finger
+ * check ({@code OrderLimitsRule}): a MARKET order has nothing to deviate from the mark, so that check
+ * skips it, while a LIMIT order's price is compared against the mark and refused if it is too far off.
+ * The notional above deliberately stays estimated at the mark and does <em>not</em> switch to
+ * {@code limitPrice} when one is present - the cap has to fire on the orders the gate actually sends
+ * (MARKET, no price), and a LIMIT within the deviation band would move the notional by at most that
+ * band anyway.
  */
 public record OrderFacts(
         SignalFacts signal,
         Side side,
         BigDecimal qty,
+        BigDecimal limitPrice,
         BigDecimal orderNotional,
         BigDecimal projectedSignedQty,
         BigDecimal projectedSymbolNotional,
         BigDecimal projectedTotalNotional) {
 
+    /** A MARKET candidate order: no price of its own, so the fat-finger check has nothing to compare. */
     public static OrderFacts of(SignalFacts facts, Side side, BigDecimal qty) {
+        return of(facts, side, qty, null);
+    }
+
+    /**
+     * @param limitPrice the candidate order's own price, or {@code null} for MARKET
+     */
+    public static OrderFacts of(SignalFacts facts, Side side, BigDecimal qty, BigDecimal limitPrice) {
         BigDecimal orderNotional = Money.of(qty.multiply(facts.price()));
         BigDecimal projectedSignedQty = side == Side.BUY
                 ? facts.signedQty().add(qty)
@@ -40,7 +58,7 @@ public record OrderFacts(
         BigDecimal projectedTotalNotional = Money.of(facts.totalNotional()
                 .subtract(facts.symbolNotional())
                 .add(projectedSymbolNotional));
-        return new OrderFacts(facts, side, qty, orderNotional, projectedSignedQty,
+        return new OrderFacts(facts, side, qty, limitPrice, orderNotional, projectedSignedQty,
                 projectedSymbolNotional, projectedTotalNotional);
     }
 }
