@@ -10,6 +10,7 @@ import com.ciaozn.alphatrader.backtest.report.PerformanceAnalyzer;
 import com.ciaozn.alphatrader.backtest.report.PerformanceMetrics;
 import com.ciaozn.alphatrader.backtest.report.TradeTracker;
 import com.ciaozn.alphatrader.common.data.KlineRepository;
+import com.ciaozn.alphatrader.common.model.Symbol;
 import com.ciaozn.alphatrader.common.model.TradingRulesProvider;
 import com.ciaozn.alphatrader.common.portfolio.Portfolio;
 import com.ciaozn.alphatrader.common.time.VirtualClock;
@@ -74,9 +75,11 @@ public final class BacktestRunner {
      * obviously correct default; the canonical one exists so a caller - alpha-app reading yml, a
      * cost-sensitivity sweep - can override any of them.
      *
-     * <p>A run with no strategies is refused rather than replayed. It would produce a perfectly
-     * flat equity curve and a report reading "0 trades", indistinguishable from a strategy that
-     * broke even, and the usual cause is a configuration typo that disabled everything.
+     * <p>Three configurations are refused rather than replayed, all because each would produce a
+     * report that looks like a result: no strategies, a non-positive account, and a symbol a
+     * strategy trades with no trading rules behind it. Each replays every bar, trades nothing and
+     * reports a flat curve indistinguishable from a strategy that broke even, and each is normally
+     * a configuration typo.
      */
     public record Config(
             KlineRepository repository,
@@ -100,6 +103,20 @@ public final class BacktestRunner {
             }
             if (strategies == null || strategies.isEmpty()) {
                 throw new IllegalArgumentException("Nothing to backtest: no strategies enabled");
+            }
+            // Same failure shape as the two above, one level subtler: without tickSize/stepSize the
+            // gate blocks every signal as RK-07, so the run replays everything, trades nothing and
+            // reports a flat curve that reads as "this strategy broke even". Checked against what
+            // the strategies trade rather than what is replayed - an extra context series nobody
+            // sends orders for is legitimate and needs no rules.
+            for (Strategy strategy : strategies) {
+                for (Symbol symbol : strategy.symbols()) {
+                    if (tradingRules.find(symbol).isEmpty()) {
+                        throw new IllegalArgumentException("No trading rules for " + symbol.unified()
+                                + ", which strategy " + strategy.id() + " trades: every signal would be "
+                                + "blocked as " + RiskGate.RULE_MISSING_TRADING_RULES);
+                    }
+                }
             }
             series = List.copyOf(series);
             strategies = List.copyOf(strategies);

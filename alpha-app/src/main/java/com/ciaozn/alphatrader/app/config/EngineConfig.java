@@ -3,7 +3,6 @@ package com.ciaozn.alphatrader.app.config;
 import com.ciaozn.alphatrader.common.portfolio.Portfolio;
 import com.ciaozn.alphatrader.common.time.Clock;
 import com.ciaozn.alphatrader.common.time.SystemClock;
-import com.ciaozn.alphatrader.common.time.VirtualClock;
 import com.ciaozn.alphatrader.engine.EventEngine;
 import com.ciaozn.alphatrader.engine.EventJournal;
 import com.ciaozn.alphatrader.engine.JsonlEventJournal;
@@ -15,22 +14,22 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 
 /**
- * Core wiring: the three replaceable parts of the isomorphism (DESIGN §10):
- * Clock, market data source, executor. This class owns Clock + journal + engine + the account
- * book; gateways/executors live in profile-specific configs.
+ * Core wiring for the online modes: clock, journal, engine and the one account book (DESIGN §10's
+ * replaceable parts, of which gateways and executors live in profile-specific configs).
+ *
+ * <p>Backtest is absent on purpose. Its clock, engine and journal are per-run objects that
+ * {@code BacktestRunner} builds itself: a singleton {@code VirtualClock} would have to start at the
+ * first bar of whichever range happens to be configured, a singleton engine would outlive the
+ * replay and hold the JVM open with its non-daemon loop thread, and a singleton journal would
+ * accumulate every run into one file. The isomorphism FR-BT-06 asks for is that the components be
+ * the same <em>classes</em> with the same behaviour, not the same instances - and the three that
+ * differ between modes are exactly the three the runner constructs.
  */
 @Configuration
+@Profile({"paper", "live"})
 public class EngineConfig {
 
-    /** Backtest: time only moves when the feeder advances it (deterministic, NFR-04). */
     @Bean
-    @Profile("backtest")
-    Clock virtualClock() {
-        return new VirtualClock(0L);
-    }
-
-    @Bean
-    @Profile({"paper", "live"})
     Clock systemClock() {
         return new SystemClock();
     }

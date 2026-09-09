@@ -1,5 +1,44 @@
 alpha:
   mode: backtest
-  # Backtest: no gateway, no credentials, VirtualClock. Feeder arrives in P2.
+  # Backtest: no gateway, no credentials, VirtualClock. Replays the stored bars in
+  # [from, to] once, writes reports/backtest-report.html, prints the console summary and exits.
   trading:
     enabled: false
+  backtest:
+    data:
+      # csv: one file per series, <csv-dir>/BTCUSDT.PERP-1h.csv (what the downloader writes)
+      # db:  the SQLite store, needs jdbc-url
+      source: csv
+      csv-dir: data/klines
+      # jdbc-url: jdbc:sqlite:data/klines.db
+    # ISO-8601 UTC instants, both ends inclusive on openTime, and both required: a range guessed
+    # wider than the stored data would report the difference as gaps in the dataset.
+    # from: 2023-11-15T00:00:00Z
+    # to: 2023-12-15T00:00:00Z
+    # Empty means "replay whatever the enabled strategies listen to".
+    series: []
+    # Target exposure per signal, in (0, 1]. Unset falls back to PositionSizer.Policy.DEFAULT -
+    # the number is not repeated here so the two cannot drift apart.
+    # exposure: 0.30
+    # Simulated costs. Each unset field falls back to SimulatedExecutor.CostModel.DEFAULT.
+    # cost:
+    #   taker-fee-rate: 0.0005
+    #   fixed-slippage-bps: 5
+    #   amplitude-factor: 0.05
+    #   funding-rate-per-interval: 0.0001
+    # Precision constraints, declared here because backtest has no exchangeInfo to fetch
+    # (FR-GW-03). A symbol a strategy trades and no rule covers stops the run rather than
+    # blocking every signal into a report that reads like a strategy which never traded.
+    # Snapshot of testnet /fapi/v1/exchangeInfo taken 2026-09-09: re-check before trusting a
+    # backtest's minNotional behaviour, and note testnet filters can differ from production.
+    rules:
+      - symbol: BTCUSDT.PERP
+        tick-size: 0.10
+        step-size: 0.0001
+        min-notional: 50
+    # Directory holding the latest run's artifacts. Both files are overwritten per run: the
+    # journal appends by nature, and two runs concatenated would replay as one impossible stream.
+    report-dir: reports
+    # Serialises every event to <report-dir>/events.jsonl. Off by default: three years of hourly
+    # bars publish several events each, and writing them competes with SC-01's five minutes.
+    journal: false

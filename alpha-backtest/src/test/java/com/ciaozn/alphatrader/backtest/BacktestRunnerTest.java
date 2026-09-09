@@ -217,6 +217,19 @@ class BacktestRunnerTest {
                 .hasMessageContaining("startingEquity must be positive");
     }
 
+    @Test
+    void aTradedSymbolWithNoTradingRulesIsRefused() {
+        // rules() knows BTC only. Replaying a symbol with no rules is legitimate - the
+        // sampling-period test above replays ETH and never trades it - but trading one is not:
+        // the gate would block every signal as RK-07, the run would replay all ten bars, and the
+        // report would show a flat curve reading as "this strategy broke even".
+        assertThatThrownBy(() -> new BacktestRunner.Config(store(),
+                List.of(new Series(BTC, Interval.H1)), T0, T0 + HOUR, EQUITY, rules(),
+                List.of(new EnterWhenFlat(ETH))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("No trading rules for ETHUSDT.PERP");
+    }
+
     // ------------------------------------------------------------------ fixtures
 
     private static BacktestRunner.Config config(KlineRepository repository, Strategy strategy) {
