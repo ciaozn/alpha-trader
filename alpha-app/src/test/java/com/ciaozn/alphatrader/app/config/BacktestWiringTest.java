@@ -258,8 +258,9 @@ class BacktestWiringTest {
 
     @Test
     void anAbsentBacktestBlockStillHasAUsableShape() {
-        AlphaProperties.Backtest backtest = new AlphaProperties(
-                "backtest", null, null, true, null, null, null, null, null).backtest();
+        AlphaProperties properties = new AlphaProperties(
+                "backtest", null, null, true, null, null, null, null, null, null);
+        AlphaProperties.Backtest backtest = properties.backtest();
 
         assertThat(backtest.data().source()).isEqualTo("csv");
         assertThat(backtest.data().csvDir()).isEqualTo(Path.of("data", "klines"));
@@ -267,6 +268,13 @@ class BacktestWiringTest {
         assertThat(backtest.journal()).isFalse();
         assertThat(backtest.series()).isEmpty();
         assertThat(backtest.rules()).isEmpty();
+
+        // Same question for the download block: absent means no range (so the wiring refuses rather
+        // than inventing one) and no explicit series (so it falls back to alpha.symbols).
+        assertThat(properties.download().from()).isNull();
+        assertThat(properties.download().to()).isNull();
+        assertThat(properties.download().baseUrl()).isNull();
+        assertThat(properties.download().series()).isEmpty();
 
         // No range on purpose: refusing beats inventing one, because a range wider than the stored
         // data reports the difference as gaps in the dataset.
@@ -323,7 +331,7 @@ class BacktestWiringTest {
         AlphaProperties properties = new AlphaProperties("backtest", List.of("BTCUSDT.PERP"), "1h",
                 true, new AlphaProperties.Trading(false), Path.of("logs"), fixture.initialCash,
                 List.of(new AlphaProperties.StrategyEntry("ma-btc", "ma-cross", true, null, null, params)),
-                fixture.backtest());
+                fixture.backtest(), null);
         return new BacktestWiring(properties, new StrategyRegistry()).backtest();
     }
 

@@ -1,8 +1,6 @@
 package com.ciaozn.alphatrader.app.config;
 
-import com.ciaozn.alphatrader.app.data.JdbcKlineRepository;
 import com.ciaozn.alphatrader.backtest.BacktestRunner;
-import com.ciaozn.alphatrader.backtest.data.CsvKlineRepository;
 import com.ciaozn.alphatrader.backtest.feed.BacktestDataFeeder.Series;
 import com.ciaozn.alphatrader.backtest.match.SimulatedExecutor;
 import com.ciaozn.alphatrader.backtest.report.BacktestReport;
@@ -10,7 +8,6 @@ import com.ciaozn.alphatrader.backtest.report.ConsoleSummary;
 import com.ciaozn.alphatrader.backtest.report.HtmlReportRenderer;
 import com.ciaozn.alphatrader.common.data.KlineRepository;
 import com.ciaozn.alphatrader.common.model.FixedTradingRulesProvider;
-import com.ciaozn.alphatrader.common.model.Interval;
 import com.ciaozn.alphatrader.common.model.Symbol;
 import com.ciaozn.alphatrader.common.model.TradingRules;
 import com.ciaozn.alphatrader.common.model.TradingRulesProvider;
@@ -27,9 +24,7 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
-import org.sqlite.SQLiteDataSource;
 
-import javax.sql.DataSource;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -38,9 +33,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * Backtest mode: run one replay over the configured range, write the report, and let the process
@@ -121,8 +114,8 @@ public class BacktestWiring implements ApplicationRunner {
         long to = millis(backtest.to(), "alpha.backtest.to");
         List<Strategy> strategies = registry.build(StrategyConfig.specs(properties));
         TradingRulesProvider rules = rules(backtest);
-        KlineRepository repository = repository(backtest.data());
-        List<Series> series = series(backtest, strategies);
+        KlineRepository repository = DataPlan.store(backtest.data());
+        List<Series> series = DataPlan.series(backtest.series(), strategies);
         return new BacktestRunner.Config(repository, series, from, to, properties.initialCash(),
                 rules, strategies, policy(backtest), costModel(backtest),
                 quiescenceTimeout(backtest), journal(backtest, directory));
@@ -140,58 +133,6 @@ public class BacktestWiring implements ApplicationRunner {
                     + "data would report the difference as gaps in the dataset");
         }
         return value.toEpochMilli();
-    }
-
-    private static KlineRepository repository(AlphaProperties.Backtest.Data data) {
-        return switch (data.source()) {
-            case "csv" -> new CsvKlineRepository(data.csvDir());
-            case "db" -> new JdbcKlineRepository(dataSource(data.jdbcUrl()));
-            default -> throw new IllegalStateException("alpha.backtest.data.source must be 'csv' or "
-                    + "'db', got '" + data.source() + "'");
-        };
-    }
-
-    /**
-     * SQLite, the local-dev store of DESIGN §10. No other driver is on this module's classpath, so
-     * a MySQL URL is refused here with a message naming the reason instead of failing inside the
-     * SQLite driver - the JDBC store's own MySQL compatibility is structural rather than tested,
-     * which tasks.md records as design tradeoff 5.
-     */
-    private static DataSource dataSource(String jdbcUrl) {
-        if (jdbcUrl == null || jdbcUrl.isBlank()) {
-            throw new IllegalStateException("alpha.backtest.data.jdbc-url must be set when "
-                    + "alpha.backtest.data.source is 'db'");
-        }
-        if (!jdbcUrl.startsWith("jdbc:sqlite:")) {
-            throw new IllegalStateException("alpha.backtest.data.jdbc-url must be a SQLite URL "
-                    + "(jdbc:sqlite:...), got '" + jdbcUrl + "' - this module carries no other "
-                    + "JDBC driver");
-        }
-        SQLiteDataSource dataSource = new SQLiteDataSource();
-        dataSource.setUrl(jdbcUrl);
-        return dataSource;
-    }
-
-    /**
-     * The configured series, or - when none are listed - the union of what the enabled strategies
-     * actually listen to, in configuration order and deduplicated, because two strategies on
-     * BTC 1h are one series to replay. Deriving it is the honest default: replaying a series no
-     * strategy listens to only costs time, and omitting one a strategy needs means it silently
-     * never trades.
-     */
-    private static List<Series> series(AlphaProperties.Backtest backtest, List<Strategy> strategies) {
-        Set<Series> series = new LinkedHashSet<>();
-        if (backtest.series().isEmpty()) {
-            for (Strategy strategy : strategies) {
-                strategy.symbols().forEach(symbol -> series.add(new Series(symbol, strategy.interval())));
-            }
-        } else {
-            for (AlphaProperties.Backtest.SeriesEntry entry : backtest.series()) {
-                series.add(new Series(Symbol.parse(entry.symbol()),
-                        Interval.fromBinanceCode(entry.interval())));
-            }
-        }
-        return List.copyOf(series);
     }
 
     private static TradingRulesProvider rules(AlphaProperties.Backtest backtest) {

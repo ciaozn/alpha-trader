@@ -1,0 +1,33 @@
+alpha:
+  mode: download
+  # Download: the public klines endpoint, so no credentials, no engine, no gateway and no strategy.
+  # Pages [from, to] forward into the store the backtest reads, prints what arrived, exits.
+  #
+  #   java -jar alpha-app.jar --spring.profiles.active=download \
+  #     --alpha.download.from=2023-09-10T00:00:00Z --alpha.download.to=2026-09-09T23:00:00Z
+  #
+  # Re-running the same range stores 0 bars, which is how to check the store is up to date.
+  trading:
+    enabled: false
+  download:
+    # ISO-8601 UTC instants. Both are bar OPEN times and both ends are inclusive. Both required:
+    # an open-ended download pages back to whatever the exchange happens to keep, which is not a
+    # dataset anyone can reproduce later. A `to` in the future is harmless - the downloader drops
+    # every bar that has not closed yet, so the newest stored bar is always a real one (FR-BT-02).
+    # from: 2023-09-10T00:00:00Z
+    # to: 2026-09-09T23:00:00Z
+    # Empty means alpha.symbols at alpha.interval. List series explicitly to pull something the
+    # global list does not cover, e.g. a symbol only one strategy trades:
+    # series:
+    #   - symbol: BTCUSDT.PERP
+    #     interval: 1h
+    series: []
+    # REST base. Unset means testnet or production per alpha.binance-testnet (FR-GW-05); set it only
+    # for a mirror or a local stub. Page size, request gap and retry budget are not configurable
+    # here on purpose - their one definition is BinanceKlineDownloader.Settings.
+    # base-url: https://testnet.binancefuture.com
+
+# The destination is NOT an alpha.download knob: it is alpha.backtest.data in application.yml, the
+# same store the backtest reads. One directory, one definition, in the one file both profiles load -
+# this profile never sees application-backtest.yml, so a store declared there would be a second
+# definition and the download would fill a directory the backtest does not read.

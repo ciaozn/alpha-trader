@@ -232,7 +232,7 @@ class BacktestSmokeTest {
         return new AlphaProperties("backtest", List.of(BTC.unified()), "1h", true,
                 new AlphaProperties.Trading(false), Path.of("logs"), EQUITY,
                 List.of(new AlphaProperties.StrategyEntry("ma-cross-btc", "ma-cross", true, null, null, params)),
-                backtest);
+                backtest, null);
     }
 
     /**

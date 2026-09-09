@@ -29,6 +29,14 @@
             <artifactId>sqlite-jdbc</artifactId>
             <version>${sqlite-jdbc.version}</version>
         </dependency>
+        <!-- Declared rather than inherited transitively through alpha-gateway: DownloadWiring
+             builds an OkHttpClient in main code, and a module that compiles against a dependency
+             it does not declare breaks the day the other module swaps its HTTP client.
+             Version comes from the Spring Boot BOM. -->
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>com.ciaozn.alphatrader</groupId>

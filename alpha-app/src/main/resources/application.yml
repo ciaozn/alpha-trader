@@ -16,6 +16,18 @@ alpha:
   journal-dir: logs
   # Starting book for backtest and paper. Live reconciles it against the exchange from P3.
   initial-cash: 10000
+  # The kline store. Shared, so it lives in the shared file: the download profile writes it and the
+  # backtest profile reads it, and Spring loads application-<profile>.yml only for the active
+  # profile. Declaring it in application-backtest.yml would leave the download writing to the
+  # record default (data/klines) while a backtest reads whatever that file says - one directory,
+  # two definitions, and the symptom is a report with no trades in it.
+  backtest:
+    data:
+      # csv: one file per series, <csv-dir>/BTCUSDT.PERP-1h.csv (what the download profile writes)
+      # db:  the SQLite store, needs jdbc-url
+      source: csv
+      csv-dir: data/klines
+      # jdbc-url: jdbc:sqlite:data/klines.db
   # Enabling a strategy here is all it takes to run it in backtest, paper and live alike -
   # the engine, risk pipeline and OMS never change (FR-ST-01, spec scenario 6).
   # Parameter keys are matched ignoring case, '-' and '_'; an unknown key fails startup.

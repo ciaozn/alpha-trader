@@ -20,9 +20,46 @@ public record AlphaProperties(
         Path journalDir,
         BigDecimal initialCash,
         List<StrategyEntry> strategies,
-        Backtest backtest) {
+        Backtest backtest,
+        Download download) {
 
     public record Trading(boolean enabled) {
+    }
+
+    /**
+     * The {@code alpha.download} block (T223, FR-BT-05): which series to pull, over what range,
+     * and from which REST base.
+     *
+     * <p><b>The destination is deliberately not here.</b> Downloaded bars go to
+     * {@code alpha.backtest.data} - the store the backtest reads. Two knobs for one directory is
+     * how an operator ends up with a full CSV directory and a backtest that reports it has no data,
+     * which reads like a bug in the strategy rather than a typo in a path. This is the same
+     * reasoning that keeps {@code initial-cash} and {@code strategies} out of {@code backtest}.
+     *
+     * <p><b>The range is here and does not fall back to {@code alpha.backtest.from/to}.</b>
+     * Downloading is cumulative and idempotent (the downloader dedupes against what is stored),
+     * while a backtest is one stated experiment over part of that history. Sharing the range would
+     * make it impossible to hold three years and replay one month.
+     *
+     * <p>{@code baseUrl} overrides only that one field of {@code BinanceKlineDownloader.Settings};
+     * page size, request gap and retry budget stay at the tuned {@code Settings.TESTNET}/{@code
+     * Settings.LIVE} values, picked by {@code alpha.binance-testnet}. Restating them in yml would
+     * give those numbers a second definition that can drift.
+     */
+    public record Download(
+            Instant from,
+            Instant to,
+            List<Backtest.SeriesEntry> series,
+            String baseUrl) {
+
+        /** What an absent block means: no range, so the wiring refuses rather than inventing one. */
+        public static final Download DEFAULTS = new Download(null, null, null, null);
+
+        public Download {
+            if (series == null) {
+                series = List.of();
+            }
+        }
     }
 
     /**
@@ -156,6 +193,9 @@ public record AlphaProperties(
         }
         if (backtest == null) {
             backtest = Backtest.DEFAULTS;
+        }
+        if (download == null) {
+            download = Download.DEFAULTS;
         }
     }
 }

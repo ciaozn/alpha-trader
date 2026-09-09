@@ -5,12 +5,8 @@ alpha:
   trading:
     enabled: false
   backtest:
-    data:
-      # csv: one file per series, <csv-dir>/BTCUSDT.PERP-1h.csv (what the downloader writes)
-      # db:  the SQLite store, needs jdbc-url
-      source: csv
-      csv-dir: data/klines
-      # jdbc-url: jdbc:sqlite:data/klines.db
+    # data (source / csv-dir / jdbc-url) is in application.yml, not here: the download profile
+    # writes the same store and does not load this file.
     # ISO-8601 UTC instants, both ends inclusive on openTime, and both required: a range guessed
     # wider than the stored data would report the difference as gaps in the dataset.
     # from: 2023-11-15T00:00:00Z
@@ -39,6 +35,7 @@ alpha:
     # Directory holding the latest run's artifacts. Both files are overwritten per run: the
     # journal appends by nature, and two runs concatenated would replay as one impossible stream.
     report-dir: reports
-    # Serialises every event to <report-dir>/events.jsonl. Off by default: three years of hourly
-    # bars publish several events each, and writing them competes with SC-01's five minutes.
+    # Serialises every event to <report-dir>/events.jsonl. Off by default because of what it
+    # writes, not how long it takes: measured on the 26281-bar SC-01 run it added 0.3s (1.4s ->
+    # 1.8s wall) and an 8.3MB file per run. Turn it on to replay one run event by event.
     journal: false
