@@ -1,11 +1,10 @@
 package com.ciaozn.alphatrader.common.portfolio;
 
+import com.ciaozn.alphatrader.common.model.Money;
 import com.ciaozn.alphatrader.common.model.Side;
 import com.ciaozn.alphatrader.common.model.Symbol;
 
 import java.math.BigDecimal;
-import java.math.MathContext;
-import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -25,10 +24,6 @@ import java.util.Map;
  * All money math uses BigDecimal with a fixed scale and rounding mode; doubles never appear.
  */
 public final class Portfolio {
-
-    /** Fixed precision rules: same input -> bit-identical output across runs and machines. */
-    private static final MathContext MC = new MathContext(24, RoundingMode.HALF_UP);
-    private static final int MONEY_SCALE = 8;
 
     private final BigDecimal startingEquity;
     private final Map<Symbol, BigDecimal> signedQty = new LinkedHashMap<>();
@@ -98,7 +93,7 @@ public final class Portfolio {
             // Add: weighted average entry.
             realized = zero();
             BigDecimal weighted = oldEntry.multiply(old.abs()).add(price.multiply(delta.abs()));
-            entryPrice.put(symbol, weighted.divide(updated.abs(), MC));
+            entryPrice.put(symbol, Money.divide(weighted, updated.abs()));
         }
 
         signedQty.put(symbol, updated);
@@ -198,10 +193,10 @@ public final class Portfolio {
     }
 
     private static BigDecimal zero() {
-        return BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.UNNECESSARY);
+        return Money.zero();
     }
 
     private static BigDecimal money(BigDecimal value) {
-        return value.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        return Money.of(value);
     }
 }

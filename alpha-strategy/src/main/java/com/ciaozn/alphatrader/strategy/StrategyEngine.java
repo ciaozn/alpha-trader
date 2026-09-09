@@ -110,6 +110,9 @@ public final class StrategyEngine implements EventHandler {
             return;
         }
         deliveredBars++;
+        // Mark before dispatching: the risk gate sizes signals against the mark price, so it must
+        // already reflect the bar that produced them (and not the previous one, or nothing at all).
+        portfolio.mark(event.symbol(), event.kline().close());
         for (Strategy strategy : interested) {
             invoke(strategy, () -> strategy.onKline(event, context(strategy, publisher)));
         }

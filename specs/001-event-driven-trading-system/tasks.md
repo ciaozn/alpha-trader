@@ -66,7 +66,7 @@
 | T206 | `StrategyEngine`（EventHandler）：按 symbol 分发 closed K 线、喂 BarSeries、信号经 cascade 发出 | ST-01 | 分发 + 过滤非订阅 symbol 单测 | ☑ |
 | T207 | `MaCrossStrategy`：金叉做多、死叉平多/翻空，fast/slow/allowShort 可配 | ST-02 | 构造 K 线序列触发预期信号单测 | ☑ |
 | T208 | `RsiReversalStrategy`：超卖做多、超买平多，period/os/ob（+可选 ATR 波动过滤）可配 | ST-03 | 同上 | ☑ |
-| T209 | `PositionSizer` + 风控直通闸门（alpha-risk）：信号 → 目标仓位增量 → stepSize 取整 → OrderRequestEvent；小于最小数量/名义则放弃并告警 | RK-07、边界 4 | 换算 + 取整 + 放弃告警单测 | ☐ |
+| T209 | `PositionSizer` + 风控直通闸门（alpha-risk）：信号 → 目标仓位增量 → stepSize 取整 → OrderRequestEvent；小于最小数量/名义则放弃并告警 | RK-07、边界 4 | 换算 + 取整 + 放弃告警单测 | ☑ |
 | T210 | `KlineRepository` 契约（common）+ `CsvKlineRepository`（backtest，DESIGN §10 的 CSV 回放源） | BT-01 | CSV round-trip 单测 | ☐ |
 | T211 | `JdbcKlineRepository`（alpha-app，SQLite/MySQL 同 schema）+ 建表 | BT-05、OP-04 前置 | 临时 SQLite 文件 round-trip 单测 | ☐ |
 | T212 | `BinanceKlineDownloader`（gateway REST，1500 根分页、base url testnet/实盘可配、限速退避） | BT-05、GW-05 | 解析单测（mock JSON）+ testnet 真实拉取入库 | ☐ |
@@ -90,6 +90,10 @@
 > 2. K 线仓储契约放 alpha-common（纯接口，零依赖），SQLite/MySQL 的 JDBC 实现放 alpha-app（唯一有 Spring/驱动的模块），
 >    CSV 实现放 alpha-backtest —— 严格守住 `app → backtest → {strategy,risk,execution,gateway} → engine → common` 单向依赖。
 > 3. `Portfolio`（持仓/权益/已实现盈亏）放 alpha-common：它是 spec §5 的领域实体，回测撮合与实盘 OMS 必须共用同一份实现（FR-BT-06）。
+> 4. **P2 的风控范围是刻意收窄的，不是遗漏**：`RiskGate` 目前只做仓位换算（FR-RK-07）+ 交易所最小值校验（边界 4），
+>    DESIGN §8 的账户/单笔/组合/熔断/频率规则在 P3 以有序管道接在它前面，下游（OMS/撮合）无需改动。
+>    同理 `PositionSizer.Policy.targetExposure` 被限制在 (0, 1]：在账户级杠杆规则（FR-RK-02/04）就位前，
+>    sizer 不允许单靠自己把敞口放大到超过权益，上限放开必须与那两条规则同一个 PR 落地。
 
 ---
 
@@ -109,3 +113,4 @@
 | 2026-09-09 02:00 | T207-T208（MA 双均线 + RSI 反转策略） | 通过：新增 12 个单测全绿（alpha-strategy 累计 33）。信号只在状态跃迁的那根 K 线发出，超买/超卖持续多根不重复下单；RSI 平仓以「已请求平仓的持仓数量」去重，既避免逐根重复发信号，也保证迟到成交重新建立多头后仍会被平掉；Strategy SPI 补 `interval()`（单周期，多周期不在 v1 范围）。修正 1 处测试自身错误（每根 K 线新建策略实例导致指标永不预热） |
 | 2026-09-09 02:06 | T206（StrategyEngine 分发器） | 通过：新增 8 个单测全绿（alpha-strategy 累计 41）。分发规则：只投 closed bar（未收盘永不进策略，FR-BT-02）、按 symbol+interval 双维度过滤、同 symbol/interval 的多策略共用一份 BarSeries 且每根只追加一次（重复/乱序直接丢弃且不回调策略，边界 1）、按配置顺序分发保证可复现、单策略抛异常被隔离不影响其他策略 |
 | 2026-09-09 02:15 | T222（策略工厂注册 + app 装配） | 通过：新增 19 个单测（alpha-strategy 累计 60，全仓 84 全绿）。`StrategyFactory` 走 `META-INF/services` 发现，`StrategyRegistry` 按 yml 顺序构建；配置错误一律启动即失败（未知 type/重复 id/参数拼错/参数值非法/工厂忽略配置 id/两个工厂抢同一 type）。app 侧：删除 EchoStrategy 占位，新增 Portfolio 与 StrategyEngine bean，网关订阅改为「alpha.symbols ∪ 已启用策略声明的 symbol+interval」，避免新策略因无人订阅而静默空跑。实测：backtest profile 启动日志正确显示发现/启用/停用；paper profile 连上 stream.binancefuture.com 并订阅 BTCUSDT.PERP/1h |
+| 2026-09-09 02:28 | T209（PositionSizer + 风控直通闸门） | 通过：新增 27 个单测（alpha-risk 26 + alpha-common ClientOrderIds 5，另 StrategyEngineTest 补 1 条标记价断言；全仓 126 全绿）。四处理解决策：①金额精度抽到 `common.model.Money`（MC(24,HALF_UP)/scale 8）唯一定义，Portfolio 与 sizer 共用，避免两处各自取整导致回测与实盘漂移（数量断言按 scale 精确比对而非 compareTo）；②P2 的 `targetExposure` 上限钉死 1.0，杠杆/账户级敞口是 P3 的 FR-RK-02/04，规则未就位前不允许 sizer 自行放大账户；③闸门只发 MARKET 且 `price=null`——回测撮合按次根开盘、实盘按盘口，此处带限价要么是未来函数要么是过期报价；④`StrategyEngine` 在分发前用收盘 `portfolio.mark()`，否则 paper/live 每个信号都会因无标记价被 `RK-07-no-price` 拦死（回测因撮合先跑不易暴露）。边界 4 落实：不足 minNotional / stepSize 取整为 0 一律拒单 + WARNING 告警，绝不发脏单；无交易规则视为 CRITICAL 硬停 |

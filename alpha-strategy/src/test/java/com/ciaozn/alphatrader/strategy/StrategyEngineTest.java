@@ -135,6 +135,21 @@ class StrategyEngineTest {
     }
 
     @Test
+    void marksThePortfolioBeforeDispatchingTheBarThatProducedTheSignal() {
+        RecordingStrategy strategy = new RecordingStrategy("btc-1h", Interval.H1, BTC);
+        StrategyEngine engine = engine(strategy);
+
+        engine.onEvent(closedBar(BTC, Interval.H1, T0, 100), published::add);
+        engine.onEvent(closedBar(BTC, Interval.H1, T0 + HOUR, 105), published::add);
+        // duplicate and forming bars are dropped, so they must not move the mark either
+        engine.onEvent(closedBar(BTC, Interval.H1, T0 + HOUR, 999), published::add);
+        engine.onEvent(bar(BTC, Interval.H1, T0 + 2 * HOUR, 999, false), published::add);
+
+        assertThat(portfolio.markOf(BTC)).isEqualByComparingTo("105");
+        assertThat(strategy.klines).hasSize(2);
+    }
+
+    @Test
     void duplicateAndStaleBarsAreDroppedWithoutReInvokingStrategies() {
         RecordingStrategy strategy = new RecordingStrategy("btc-1h", Interval.H1, BTC);
         StrategyEngine engine = engine(strategy);
