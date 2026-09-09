@@ -4,6 +4,7 @@ import com.ciaozn.alphatrader.common.event.Event;
 import com.ciaozn.alphatrader.common.event.FillEvent;
 import com.ciaozn.alphatrader.common.event.KlineEvent;
 import com.ciaozn.alphatrader.common.event.OrderRequestEvent;
+import com.ciaozn.alphatrader.common.event.OrderReportEvent;
 import com.ciaozn.alphatrader.common.event.OrderUpdateEvent;
 import com.ciaozn.alphatrader.common.event.RiskAlertEvent;
 import com.ciaozn.alphatrader.common.event.SignalEvent;
@@ -57,6 +58,7 @@ public final class JsonlEventJournal implements EventJournal {
                 new NamedType(TickerEvent.class, "ticker"),
                 new NamedType(SignalEvent.class, "signal"),
                 new NamedType(OrderRequestEvent.class, "orderRequest"),
+                new NamedType(OrderReportEvent.class, "orderReport"),
                 new NamedType(OrderUpdateEvent.class, "orderUpdate"),
                 new NamedType(FillEvent.class, "fill"),
                 new NamedType(TimerEvent.class, "timer"),

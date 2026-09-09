@@ -12,7 +12,7 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
  */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.PROPERTY, property = "type")
 public sealed interface Event
-        permits KlineEvent, TickerEvent, SignalEvent, OrderRequestEvent,
+        permits KlineEvent, TickerEvent, SignalEvent, OrderRequestEvent, OrderReportEvent,
                 OrderUpdateEvent, FillEvent, TimerEvent, RiskAlertEvent {
 
     /** Global monotonic sequence number, assigned by {@link EventIds}. */
