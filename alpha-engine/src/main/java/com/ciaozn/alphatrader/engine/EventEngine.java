@@ -36,6 +36,7 @@ public final class EventEngine implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(EventEngine.class);
 
     private final BlockingQueue<Event> externalQueue = new LinkedBlockingQueue<>();
+    private final BlockingQueue<Runnable> loopTasks = new LinkedBlockingQueue<>();
     private final PriorityBlockingQueue<ScheduledTimer> timers = new PriorityBlockingQueue<>();
     private final List<EventHandler> handlers = new CopyOnWriteArrayList<>();
     private final ArrayDeque<Event> cascade = new ArrayDeque<>();
@@ -66,6 +67,21 @@ public final class EventEngine implements AutoCloseable {
     /** Thread-safe entry point for external producers (gateways, feeders, REST). */
     public void publish(Event event) {
         externalQueue.offer(event);
+    }
+
+    /**
+     * Hands work to the loop thread (T318). Components that must read or write shared state - the
+     * book, the order store - but need to do blocking IO first use this: gather the facts on their
+     * own thread, then apply them here.
+     *
+     * <p>This exists because "only the engine thread touches shared state" is a guarantee worth
+     * keeping, and a background task that merely published events could not honour it: it would have
+     * to read the book to decide what to publish. Doing the IO on the loop instead would stall every
+     * strategy for a network round trip, which is worse.
+     */
+    public void runOnLoop(Runnable task) {
+        loopTasks.offer(task);
+        wakeLoop();
     }
 
     /** Schedule a repeating timer (reconciliation, heartbeat...). Fires as TimerEvent. */
@@ -186,11 +202,24 @@ public final class EventEngine implements AutoCloseable {
         return !dispatching && externalQueue.isEmpty() && millisUntilNextTimer() > 0;
     }
 
+    /** Work handed in by other threads (see {@link #runOnLoop}) runs on the loop, before the next event. */
+    private void drainTasks() {
+        Runnable task;
+        while ((task = loopTasks.poll()) != null) {
+            try {
+                task.run();
+            } catch (Exception e) {
+                log.error("Loop task failed", e);
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ loop
 
     private void runLoop() {
         while (running) {
             try {
+                drainTasks();
                 Event event = pollNext();
                 if (event != null) {
                     dispatchRound(event);

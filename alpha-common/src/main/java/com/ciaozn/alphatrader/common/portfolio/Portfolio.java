@@ -107,6 +107,31 @@ public final class Portfolio {
     }
 
     /**
+     * Reconciliation write (FR-EX-04): the exchange is the source of truth, so when its position
+     * disagrees with this book, the book is set to the exchange's numbers.
+     *
+     * <p><b>Not a fill.</b> The only other way to move a position is {@link #applyFill}, and using it
+     * here would be a lie: it would invent a fill price, realize P&L against an entry price we no
+     * longer trust, and charge a fee that was never charged - three numbers that then disagree with
+     * the exchange's own statement of the account, which is exactly the disagreement being fixed.
+     * A correction sets quantity and entry price and leaves realized P&L alone, because what
+     * happened between the last fill and this correction is unknown, not zero.
+     *
+     * @param signedQty  signed: positive long, negative short, zero to drop the symbol entirely
+     * @param entryPrice the exchange's entry price for the remaining position
+     */
+    public void setPosition(Symbol symbol, BigDecimal signedQty, BigDecimal entryPrice) {
+        BigDecimal qty = money(signedQty);
+        if (qty.signum() == 0) {
+            this.signedQty.remove(symbol);
+            this.entryPrice.remove(symbol);
+            return;
+        }
+        this.signedQty.put(symbol, qty);
+        this.entryPrice.put(symbol, money(entryPrice));
+    }
+
+    /**
      * Perpetual funding settlement (spec edge case 5): notional * rate, paid by longs when
      * the rate is positive and received by shorts. Returns the cash amount charged
      * (positive = cost, negative = income).
