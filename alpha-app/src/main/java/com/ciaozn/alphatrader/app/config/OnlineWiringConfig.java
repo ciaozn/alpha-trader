@@ -29,7 +29,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.context.annotation.Profile;
-import org.sqlite.SQLiteDataSource;
 
 import javax.sql.DataSource;
 import java.util.ArrayList;
@@ -59,9 +58,10 @@ public class OnlineWiringConfig {
 
     @Bean
     DataSource dataSource(StoreProperties store) {
-        SQLiteDataSource dataSource = new SQLiteDataSource();
-        dataSource.setUrl(store.jdbcUrl());
-        log.info("Business store: {}", store.jdbcUrl());
+        // SQLite locally, MySQL on the server (T408): the URL decides, and StoreDataSource owns
+        // that decision so the dialect rules are testable without a container.
+        DataSource dataSource = com.ciaozn.alphatrader.app.data.StoreDataSource.create(store);
+        log.info("Business store: {} ({})", store.jdbcUrl(), store.dialect());
         return dataSource;
     }
 
