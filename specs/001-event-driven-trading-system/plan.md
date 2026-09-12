@@ -124,10 +124,10 @@
 | P3-4 告警 + 拦截记录落库 | T309-T311、T313b/T313c | ☑ 完成（六张表 DDL + JDBC 实现 + `SignalRecorder` 落 signals） |
 | P3-5 订单状态机 | T312、T313 | ☑ 完成（含非法迁移拒绝、clientOrderId 幂等、边界 6「交易所没回答」） |
 | P3-9 成交回报 → 持仓/净值 | T314 | ☑ 完成（先写 Portfolio 再 publish FillEvent） |
-| P3-7 精度对齐 | T315 | ⏳ 进行中：`BinanceExchangeInfoParser` / `BinanceTradingRulesFetcher` 已写（未提交），**尚未接进在线装配**，`TradingRulesProvider` 目前只有回测用的 `FixedTradingRulesProvider` |
-| P3-8 下单 REST + user data stream | T316、T317 | ⬜ 待办（签名、listenKey keepalive、回报解析） |
-| P3-10 定时对账 | T318、T318b | ⬜ 待办（对账 + 快照采样器） |
-| P3-11 装配收口 | T319、T320 | ⬜ 待办（在线路径目前只注册了 `StrategyEngine`，风控与 OMS 尚未接进 handler 序列） |
+| P3-7 精度对齐 | T315 | ☑ 完成（`OnlineTradingRules` 在启动期拉取 exchangeInfo 并缓存） |
+| P3-8 下单 REST + user data stream | T316、T317 | ☑ 完成（签名用 RFC 4231 向量钉住；listenKey 30min keepalive + 回报解析） |
+| P3-10 定时对账 | T318、T318b | ☑ 完成（五类差异 + 启动全量同步；快照采样器带 markPrice） |
+| P3-11 装配收口 | T319、T320 | ☑ 完成（`OnlineHandlers` 显式表达 dispatch 顺序；场景 3 端到端离线通过） |
 
 **已完成 22/23 项**。剩余 1 项 T321（场景 2：testnet API Key 属用户凭据，不由本仓库持有）。
 
@@ -209,19 +209,44 @@
 
 ---
 
-## 10. 下一步（2026-09-12 更新）
+## 10. 下一步（2026-09-12 第二次更新）
 
-已完成：P0 骨架 → P1 引擎与行情 → P2 策略与回测（出口 SC-01/SC-02 达成）→ P3 风控与 OMS 的离线部分（T301-T314）。
+**已完成**：P0 骨架 → P1 引擎与行情 → P2 策略与回测（SC-01/SC-02 达成）→ P3 风控与 OMS 全链路
+（T301-T320）→ **P4 编码完成**（T401-T408：告警、状态接口、崩溃恢复、热更新、幽灵仓位、OKX、
+Docker、双方言）→ **P5 可编码部分完成**（T501-T504：实盘权益上限、启动前置校验、告警演练、净值日报）。
 
-接下来按此顺序继续 P3，然后进入 P4：
+**代码层面只剩一件事**：
 
-1. ~~T315 精度对齐收口~~ ✅ 已完成：`BinanceExchangeInfoParser` / `BinanceTradingRulesFetcher`（代码已在磁盘、未提交）接进在线装配的 `TradingRulesProvider`，补脏单被拒测试
-2. ~~T316 签名 REST~~ ✅ 已完成
-3. ~~T317 user data stream~~ ✅ 已完成
-4. ~~T318 / T318b 对账与快照~~ ✅ 已完成
-5. ~~T319 在线装配通电~~ ✅ 已完成
-6. ~~T320 场景 3 端到端离线验收~~ ✅ 已完成
-7. **T321 场景 2 模拟盘联调**：需 testnet API Key（用户执行），见下
-8. P3 出口达成后进入 P4：邮件告警、REST 状态、崩溃恢复、OKX 网关、Docker 部署
+1. **T505 SC-05 信号一致性抽查** —— 需要先补桥：`BacktestReport` 目前只导出成交/挂单，不导出信号，
+   而比对的两端必须都是信号序列。补桥约半小时，之后才能做比对逻辑（不做半成品）。
 
-> tasks 采用滚动式细化：P0-P3 细任务已在 tasks.md；P4/P5 在临近开工时再细化。
+**需要用户执行的四件事**（唯一权威清单见 [tasks.md](./tasks.md) 的「阻塞与待办总表」）：
+
+2. Binance testnet Key → T321 场景 2 联调 + T409 SC-03 七天连续运行
+3. OKX 凭据 → T406 demo 全链路联调
+4. 有 Docker 的机器 → T407 镜像构建 + T408 MySQL 真机验证
+5. 真实资金 + 两周时间 → T506 实盘启动 + T507 SC-06 观察
+
+---
+
+## 11. P6：未规划（现状说明）
+
+**本 plan 到 P5 为止，没有 P6。** 阶段划分的终点是「实盘运行并观察两周」（SC-06），
+再往后属于**运营与新需求**，而不是原设计的剩余部分——所以它不该被悄悄塞进 P5 里冒充规划。
+
+如果将来要开 P6，候选内容应当从「已经记录在案的取舍与局限」里长出来，而不是凭空想。目前这类
+已记录事项有：
+
+| 候选 | 出处 | 性质 |
+|---|---|---|
+| OKX 私有流（成交回报目前最多延迟一个对账周期 60s） | `OkxSwapGateway` 类注释里写明的刻意取舍 | 完善 |
+| Spring Actuator 接线（DESIGN 提过 Actuator + 自建 `/api/status`，只做了后者） | DESIGN §11 | 完善 |
+| app 容器 healthcheck（compose 只检查 MySQL） | `docker-compose.yml` | 完善 |
+| 策略库扩展（当前仅 MA 交叉 + RSI）、参数寻优 / walk-forward | 原设计未展开 | 新功能 |
+| 多标的 / 多策略资金分配 | 原设计未展开 | 新功能 |
+| 备用告警渠道（Server 酱 / 企业微信 webhook） | DESIGN §11 备注 | 完善 |
+| 性能升级口：Disruptor 替换自研事件循环 | DESIGN §5 预留 | 新功能 |
+| 运维：数据备份、密钥轮换、月度审计报表 | 原设计未展开 | 运维 |
+
+> 要不要开 P6、开哪些，等 P5 的实盘观察（SC-06）有结论再定更合理：两周的真实运行会给出
+> 比现在更可靠的优先级依据。**本表只是「以后可以往哪走」的备忘，不是承诺。**
