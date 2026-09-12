@@ -1,10 +1,12 @@
 package com.ciaozn.alphatrader.app.config;
 
+import com.ciaozn.alphatrader.app.recovery.StartupRecovery;
 import com.ciaozn.alphatrader.common.model.TradingRulesProvider;
 import com.ciaozn.alphatrader.common.portfolio.Portfolio;
 import com.ciaozn.alphatrader.common.time.Clock;
 import com.ciaozn.alphatrader.engine.EventEngine;
 import com.ciaozn.alphatrader.engine.EventHandler;
+import com.ciaozn.alphatrader.engine.EventJournal;
 import com.ciaozn.alphatrader.execution.MarkPriceUpdater;
 import com.ciaozn.alphatrader.execution.OrderManager;
 import com.ciaozn.alphatrader.execution.OrderSender;
@@ -129,14 +131,26 @@ public class OnlineWiringConfig {
     }
 
     @Bean
-    Reconciler reconciler(OrderStore store, Portfolio portfolio, Clock clock) {
-        return new Reconciler(store, portfolio, clock);
+    Reconciler reconciler(OrderStore store, Portfolio portfolio, Clock clock, AlphaProperties properties) {
+        return new Reconciler(store, portfolio, clock, Reconciler.DEFAULT_EQUITY_TOLERANCE,
+                properties.reconciliation().autoCloseGhostPositions());
     }
 
     @Bean(destroyMethod = "close")
     ReconciliationRunner reconciliationRunner(ExchangeGateway gateway, Reconciler reconciler,
                                               EventEngine engine, OnlineProperties online) {
         return new ReconciliationRunner(gateway, reconciler, engine, online.reconcilePeriod());
+    }
+
+    /**
+     * T403: verifies the event journal against the exchange-synced book at startup. Not an
+     * {@code ApplicationRunner} - {@link StartupWiring} calls it at the one point in its sequence where
+     * the exchange facts are applied and no market event can have been dispatched yet.
+     */
+    @Bean
+    StartupRecovery startupRecovery(EventJournal journal, Portfolio portfolio, OrderStore orderStore,
+                                    Clock clock, EventEngine engine) {
+        return new StartupRecovery(journal, portfolio, orderStore, clock, engine);
     }
 
     /**

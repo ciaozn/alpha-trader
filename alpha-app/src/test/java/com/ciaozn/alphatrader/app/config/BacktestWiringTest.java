@@ -284,7 +284,7 @@ class BacktestWiringTest {
     @Test
     void anAbsentBacktestBlockStillHasAUsableShape() {
         AlphaProperties properties = new AlphaProperties(
-                "backtest", null, null, true, null, null, null, null, null, null, null);
+                "backtest", null, null, true, null, null, null, null, null, null, null, null);
         AlphaProperties.Backtest backtest = properties.backtest();
 
         assertThat(backtest.data().source()).isEqualTo("csv");
@@ -385,7 +385,7 @@ class BacktestWiringTest {
                 true, new AlphaProperties.Trading(false), Path.of("logs"), fixture.initialCash,
                 fixture.risk(),
                 List.of(new AlphaProperties.StrategyEntry("ma-btc", "ma-cross", true, null, null, params)),
-                fixture.backtest(), null);
+                fixture.backtest(), null, null);
         return new BacktestWiring(properties, new StrategyRegistry()).backtest();
     }
 

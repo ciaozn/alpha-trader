@@ -328,7 +328,7 @@ class DownloadWiringTest {
                                               List<String> symbols, String interval) {
         return new AlphaProperties("download", symbols, interval, true,
                 new AlphaProperties.Trading(false), Path.of("logs"), new BigDecimal("10000"),
-                null, List.of(), backtest, download);
+                null, List.of(), backtest, download, null);
     }
 
     private static AlphaProperties.Backtest csvStore(Path klines) {

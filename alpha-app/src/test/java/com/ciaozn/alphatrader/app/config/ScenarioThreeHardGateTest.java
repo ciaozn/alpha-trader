@@ -128,7 +128,7 @@ class ScenarioThreeHardGateTest {
 
     private RiskPipeline shippedPipeline() {
         AlphaProperties properties = new AlphaProperties("paper", List.of(BTC.unified()), "1h", true,
-                null, null, new BigDecimal("10000"), null, null, null, null);
+                null, null, new BigDecimal("10000"), null, null, null, null, null);
         return RiskPipelines.of(properties.risk(), portfolio);
     }
 

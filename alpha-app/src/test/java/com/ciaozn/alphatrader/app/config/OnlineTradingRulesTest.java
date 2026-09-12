@@ -11,7 +11,7 @@ class OnlineTradingRulesTest {
 
     private static AlphaProperties properties(boolean testnet, List<String> symbols) {
         return new AlphaProperties("paper", symbols, "1h", testnet, null, null, null, null, null,
-                null, null);
+                null, null, null);
     }
 
     @Test

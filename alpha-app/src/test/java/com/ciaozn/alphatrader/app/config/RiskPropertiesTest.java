@@ -131,7 +131,7 @@ class RiskPropertiesTest {
         // falls back to its DEFAULTS, and each enabled flag normalizes null to true. A primitive
         // boolean would have bound an absent key as false and silently disabled the level.
         AlphaProperties properties = new AlphaProperties("backtest", null, null, true, null, null,
-                null, null, null, null, null);
+                null, null, null, null, null, null);
         AlphaProperties.Risk risk = properties.risk();
 
         assertThat(risk).isEqualTo(AlphaProperties.Risk.DEFAULTS);

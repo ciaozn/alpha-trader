@@ -2,9 +2,13 @@ package com.ciaozn.alphatrader.execution;
 
 import com.ciaozn.alphatrader.common.event.Event;
 import com.ciaozn.alphatrader.common.event.OrderReportEvent;
+import com.ciaozn.alphatrader.common.event.OrderRequestEvent;
 import com.ciaozn.alphatrader.common.event.RiskAlertEvent;
+import com.ciaozn.alphatrader.common.execution.ClientOrderIds;
 import com.ciaozn.alphatrader.common.model.Direction;
 import com.ciaozn.alphatrader.common.model.OrderStatus;
+import com.ciaozn.alphatrader.common.model.OrderType;
+import com.ciaozn.alphatrader.common.model.Side;
 import com.ciaozn.alphatrader.common.model.Symbol;
 import com.ciaozn.alphatrader.common.portfolio.Portfolio;
 import com.ciaozn.alphatrader.common.time.Clock;
@@ -32,10 +36,14 @@ import java.util.Map;
  * announced: a correction nobody is told about is worse than the bug it fixed, since the numbers now
  * look authoritative for the wrong reason.
  *
- * <p>What it does NOT do: it does not close positions. A ghost position - one the exchange holds and
- * we have no record of - is reported CRITICAL and left alone; closing it automatically is a P4
- * decision (spec FR-EX-05), and until then the honest behaviour is to make noise, because a position
- * we did not open may be one we do not understand.
+ * <p>What it does about a ghost position depends on configuration (T405, FR-EX-05). A ghost - one the
+ * exchange holds and this process has no record of - is always reported CRITICAL. It is additionally
+ * closed only when {@code autoCloseGhostPositions} was configured on: then this class also returns a
+ * MARKET {@link OrderRequestEvent} that nets the position to zero, and stops there. <b>It never calls a
+ * gateway</b> - the order goes back to the caller, is published, and reaches the OMS over the normal
+ * path, so it gets a row, an outbound send and a fill like any other order. A reconciliation pass that
+ * placed the order itself would leave an execution the next pass could not see. The default is alert
+ * only, because a position we did not open may be one we do not understand.
  *
  * <p>An order we believe is open that the exchange no longer lists is cancelled here, and that is a
  * judgement worth stating: a resting order disappears either by being filled or by being cancelled,
@@ -51,6 +59,14 @@ public final class Reconciler {
     public static final String RULE_GHOST_POSITION = "EX-reconcile-ghost-position";
     public static final String RULE_EQUITY_MISMATCH = "EX-reconcile-equity-mismatch";
 
+    /**
+     * Prefix of the clientOrderId an auto-close carries. The rest is the symbol, which makes the id
+     * stable across passes on purpose: a ghost the exchange still holds after the close was sent gets
+     * the same id again, and the OMS's own idempotency (FR-EX-02) drops the redelivery instead of
+     * stacking a second close order on top of the first.
+     */
+    public static final String GHOST_CLOSE_ID_PREFIX = "ghost-close-";
+
     /** Default tolerance for "our equity and the exchange's disagree": 1%. */
     public static final BigDecimal DEFAULT_EQUITY_TOLERANCE = new BigDecimal("0.01");
 
@@ -62,16 +78,28 @@ public final class Reconciler {
     private final Portfolio portfolio;
     private final Clock clock;
     private final BigDecimal equityTolerance;
+    private final boolean autoCloseGhostPositions;
 
     public Reconciler(OrderStore orders, Portfolio portfolio, Clock clock) {
-        this(orders, portfolio, clock, DEFAULT_EQUITY_TOLERANCE);
+        this(orders, portfolio, clock, DEFAULT_EQUITY_TOLERANCE, false);
     }
 
     public Reconciler(OrderStore orders, Portfolio portfolio, Clock clock, BigDecimal equityTolerance) {
+        this(orders, portfolio, clock, equityTolerance, false);
+    }
+
+    /**
+     * @param autoCloseGhostPositions T405 / FR-EX-05: when true a ghost position also produces the
+     *        MARKET order that flattens it, returned alongside the alert. Off preserves P3's
+     *        alert-only behaviour, which is the default everywhere the flag is not configured.
+     */
+    public Reconciler(OrderStore orders, Portfolio portfolio, Clock clock, BigDecimal equityTolerance,
+                      boolean autoCloseGhostPositions) {
         this.orders = orders;
         this.portfolio = portfolio;
         this.clock = clock;
         this.equityTolerance = equityTolerance;
+        this.autoCloseGhostPositions = autoCloseGhostPositions;
     }
 
     /**
@@ -142,14 +170,46 @@ public final class Reconciler {
         }
         for (Position position : remote) {
             if (portfolio.position(position.symbol()).isEmpty()) {
+                // The alert is unconditional: whether or not we act on it, an unexplained position is
+                // something the operator has to be told about.
                 events.add(RiskAlertEvent.of(RULE_GHOST_POSITION, RiskAlertEvent.Severity.CRITICAL,
-                        "ghost position at the exchange: " + position.symbol().unified() + " "
-                                + position.direction() + " " + position.qty().toPlainString()
-                                + " @ " + position.entryPrice().toPlainString()
-                                + " - left open (auto-close is P4)", now));
+                        ghostMessage(position), now));
+                // Only a real position can be closed. A FLAT or zero-qty row is the exchange saying
+                // "nothing here" in a shape that reached this loop, and ordering against it would be an
+                // order for zero - a dirty order in everything but name.
+                if (autoCloseGhostPositions && position.direction() != Direction.FLAT
+                        && position.qty().signum() > 0) {
+                    events.add(ghostCloseOrder(position, now));
+                }
             }
         }
         return events;
+    }
+
+    private String ghostMessage(Position position) {
+        String suffix = autoCloseGhostPositions
+                ? " - auto-close is on: sending a MARKET order through the OMS to flatten it"
+                : " - left open (auto-close disabled)";
+        return "ghost position at the exchange: " + position.symbol().unified() + " "
+                + position.direction() + " " + position.qty().toPlainString()
+                + " @ " + position.entryPrice().toPlainString() + suffix;
+    }
+
+    /**
+     * The order that flattens one ghost: the opposite side, the whole quantity, MARKET. MARKET for the
+     * same reason the gate only ever sends MARKET - a limit price chosen here would be a quote nobody
+     * asked for, and the position is unexplained, so waiting for a better price is not the priority.
+     *
+     * <p>The id is derived from the symbol rather than from the clock so repeated passes are
+     * idempotent; see {@link #GHOST_CLOSE_ID_PREFIX}. The zero timestamp and sequence are deliberate:
+     * {@code ClientOrderIds} normally spends them on uniqueness across orders, but here uniqueness
+     * across passes is the property we want, and the symbol already supplies it.
+     */
+    private static OrderRequestEvent ghostCloseOrder(Position position, long now) {
+        Side side = position.direction() == Direction.LONG ? Side.SELL : Side.BUY;
+        String clientOrderId = ClientOrderIds.of(GHOST_CLOSE_ID_PREFIX + position.symbol().binance(), 0L, 0L);
+        return OrderRequestEvent.of(clientOrderId, position.symbol(), side, OrderType.MARKET,
+                position.qty(), null, now);
     }
 
     private List<Event> reconcileEquity(AccountSnapshot account, long now) {

@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The gate is the only thing standing between a strategy's opinion and an order (FR-RK-01), so
@@ -623,5 +624,43 @@ class RiskGateTest {
         // Nothing was refused, so nothing is recorded. A row per signal would make the table a copy of
         // the signal table, and "how many times did risk say no" would stop having an answer.
         assertThat(harness.records().interceptions(Long.MIN_VALUE, Long.MAX_VALUE)).isEmpty();
+    }
+
+    // ------------------------------------------- the replaceable pipeline (T404, FR-RK-09)
+
+    @Test
+    void aReloadedPipelineTakesEffectOnTheNextSignalWithoutARestart() {
+        Harness harness = harness(RiskPipeline.empty(), "10000", BTC_RULES);
+        harness.portfolio().mark(BTC, new BigDecimal("100"));
+        SignalEvent signal = signal("ma-cross-btc", BTC, Direction.LONG, 1.0);
+
+        // The permissive pipeline the gate started with lets the 10%-of-equity order through.
+        harness.gate().onEvent(signal, published::add);
+        assertThat(orders(published)).hasSize(1);
+
+        published.clear();
+        harness.gate().reload(new RiskPipeline(List.of(),
+                List.of(new OrderLimitsRule(new BigDecimal("0.05"), new BigDecimal("0.02")))));
+        harness.gate().onEvent(signal, published::add);
+
+        // The very same signal is now refused, by the new rule: the swap needs no restart and no
+        // second registration, which is the whole of FR-RK-09.
+        assertThat(orders(published)).isEmpty();
+        assertThat(alerts(published)).hasSize(1);
+        assertThat(alerts(published).getFirst().ruleId()).isEqualTo(OrderLimitsRule.RULE_ID);
+        assertThat(harness.gate().pipeline().orderRules())
+                .extracting(RiskRule::ruleId).containsExactly(OrderLimitsRule.RULE_ID);
+    }
+
+    @Test
+    void aNullReloadIsRefusedAndThePreviousPipelineStaysInForce() {
+        Harness harness = harness("10000", BTC_RULES);
+        RiskPipeline before = harness.gate().pipeline();
+
+        assertThatThrownBy(() -> harness.gate().reload(null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must not be null");
+        // A refused swap is not a partial one: the gate still holds exactly the pipeline it had.
+        assertThat(harness.gate().pipeline()).isSameAs(before);
     }
 }

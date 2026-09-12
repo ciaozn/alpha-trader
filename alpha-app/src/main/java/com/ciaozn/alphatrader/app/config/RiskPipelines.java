@@ -38,13 +38,18 @@ import java.util.List;
  * rule id then never appears in an alert or an interception record, which is the honest reading of
  * "this level is off" - the alternative, a rule that always passes, would still be listed and still
  * look enforced.
+ *
+ * <p><b>Public since T404.</b> The hot-reload endpoint rebuilds a pipeline from a posted
+ * {@code alpha.risk} block, and it must go through this same mapping: a reload path that assembled
+ * rules by hand would be a second translation of the configuration, which is exactly the drift this
+ * class exists to prevent (FR-BT-06 applied to the reload path).
  */
-final class RiskPipelines {
+public final class RiskPipelines {
 
     private RiskPipelines() {
     }
 
-    static RiskPipeline of(AlphaProperties.Risk risk, Portfolio portfolio) {
+    public static RiskPipeline of(AlphaProperties.Risk risk, Portfolio portfolio) {
         List<SignalRule> signalRules = new ArrayList<>();
         if (risk.account().enabled()) {
             AlphaProperties.Risk.Account account = risk.account();

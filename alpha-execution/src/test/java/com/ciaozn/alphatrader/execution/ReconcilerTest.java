@@ -2,6 +2,7 @@ package com.ciaozn.alphatrader.execution;
 
 import com.ciaozn.alphatrader.common.event.Event;
 import com.ciaozn.alphatrader.common.event.OrderReportEvent;
+import com.ciaozn.alphatrader.common.event.OrderRequestEvent;
 import com.ciaozn.alphatrader.common.event.RiskAlertEvent;
 import com.ciaozn.alphatrader.common.model.Direction;
 import com.ciaozn.alphatrader.common.model.OrderStatus;
@@ -52,6 +53,11 @@ class ReconcilerTest {
         return events.stream().filter(OrderReportEvent.class::isInstance).map(OrderReportEvent.class::cast).toList();
     }
 
+    private static List<OrderRequestEvent> requests(List<Event> events) {
+        return events.stream().filter(OrderRequestEvent.class::isInstance)
+                .map(OrderRequestEvent.class::cast).toList();
+    }
+
     @Test
     void anOrderThatIsNoLongerRestingIsCancelledAndAnnounced() {
         openOrder("ma-1-1");
@@ -96,8 +102,8 @@ class ReconcilerTest {
 
     @Test
     void aGhostPositionIsReportedAndLeftAlone() {
-        // The exchange holds something we have no record of: closing it is a P4 decision, so this
-        // pass must only make noise - and must not fabricate a local position to match it.
+        // The exchange holds something we have no record of. With auto-close off - the default - this
+        // pass must only make noise, and must not fabricate a local position to match it.
         List<Position> theirs = List.of(new Position(BTC, Direction.SHORT, new BigDecimal("1.250"),
                 new BigDecimal("50000"), BigDecimal.ZERO));
 
@@ -108,7 +114,57 @@ class ReconcilerTest {
             assertThat(alert.severity()).isEqualTo(RiskAlertEvent.Severity.CRITICAL);
             assertThat(alert.detail()).contains("left open");
         });
+        // The default is a decision, not an omission: no order goes anywhere without being asked for.
+        assertThat(requests(events)).isEmpty();
         assertThat(portfolio.openPositions()).isEmpty();
+    }
+
+    @Test
+    void aGhostShortIsClosedWithAnOppositeMarketBuyWhenAutoCloseIsConfigured() {
+        Reconciler auto = new Reconciler(orders, portfolio, clock,
+                Reconciler.DEFAULT_EQUITY_TOLERANCE, true);
+        List<Position> theirs = List.of(new Position(BTC, Direction.SHORT, new BigDecimal("1.250"),
+                new BigDecimal("50000"), BigDecimal.ZERO));
+
+        List<Event> events = auto.reconcile(state(List.of(), theirs, portfolio.equity()));
+
+        // The alert still fires - closing it does not make it less worth knowing about.
+        assertThat(alerts(events)).anySatisfy(alert -> {
+            assertThat(alert.ruleId()).isEqualTo(Reconciler.RULE_GHOST_POSITION);
+            assertThat(alert.detail()).contains("auto-close is on");
+        });
+        // Closing a SHORT is a BUY of the whole quantity, MARKET: the order is the mirror of the
+        // exchange's position, and it is produced here rather than sent so the OMS owns the send.
+        assertThat(requests(events)).hasSize(1);
+        OrderRequestEvent close = requests(events).getFirst();
+        assertThat(close.side()).isEqualTo(Side.BUY);
+        assertThat(close.orderType()).isEqualTo(OrderType.MARKET);
+        assertThat(close.qty()).isEqualByComparingTo("1.250");
+        assertThat(close.price()).isNull();
+        assertThat(close.symbol()).isEqualTo(BTC);
+        assertThat(close.clientOrderId()).startsWith(Reconciler.GHOST_CLOSE_ID_PREFIX);
+        // It does not move the book either: adopting the ghost locally would double-count it once the
+        // close fills, and the exchange is still the only side that knows it exists.
+        assertThat(portfolio.openPositions()).isEmpty();
+    }
+
+    @Test
+    void aGhostLongIsClosedWithAnOppositeMarketSellAndAStableIdAcrossPasses() {
+        Reconciler auto = new Reconciler(orders, portfolio, clock,
+                Reconciler.DEFAULT_EQUITY_TOLERANCE, true);
+        List<Position> theirs = List.of(new Position(BTC, Direction.LONG, new BigDecimal("2"),
+                new BigDecimal("50000"), BigDecimal.ZERO));
+
+        OrderRequestEvent first = requests(auto.reconcile(state(List.of(), theirs, portfolio.equity())))
+                .getFirst();
+        // A second pass before the order has filled must not stack a second close on top of the first:
+        // the id is derived from the symbol, so the OMS's idempotency check drops the redelivery.
+        OrderRequestEvent second = requests(auto.reconcile(state(List.of(), theirs, portfolio.equity())))
+                .getFirst();
+
+        assertThat(first.side()).isEqualTo(Side.SELL);
+        assertThat(first.qty()).isEqualByComparingTo("2");
+        assertThat(second.clientOrderId()).isEqualTo(first.clientOrderId());
     }
 
     @Test

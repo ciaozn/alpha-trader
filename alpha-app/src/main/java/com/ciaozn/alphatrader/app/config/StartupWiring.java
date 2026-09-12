@@ -1,5 +1,6 @@
 package com.ciaozn.alphatrader.app.config;
 
+import com.ciaozn.alphatrader.app.recovery.StartupRecovery;
 import com.ciaozn.alphatrader.engine.EventEngine;
 import com.ciaozn.alphatrader.execution.OrderSender;
 import com.ciaozn.alphatrader.execution.ReconciliationRunner;
@@ -30,6 +31,14 @@ import org.springframework.stereotype.Component;
  * (spec edge case 7): a process restarting with a database full of open orders has to find out
  * immediately whether those orders still exist, not one period later.
  *
+ * <p><b>Recovery runs immediately after that first reconciliation pass, still before any market
+ * event can be dispatched</b> (T403, FR-EN-05). Both are loop tasks, and the engine drains its task
+ * queue before it polls the external queue, so the ordering here is enforced by the single-threaded
+ * loop rather than by timing: exchange facts applied, journal checked against the corrected book, and
+ * only then the first bar. It is deliberately not an {@code ApplicationRunner} - {@code EnvValidator}
+ * already owns {@code @Order(0)}, and a runner that ran before this one would not yet have an engine
+ * to verify on or a gateway to have synced from.
+ *
  * <p>These modes stay up: the engine's loop thread is not a daemon, which is what keeps a non-web JVM
  * alive between bars.
  */
@@ -45,17 +54,19 @@ public class StartupWiring implements ApplicationRunner {
     private final ExchangeGateway gateway;
     private final OrderSender orderSender;
     private final ReconciliationRunner reconciliation;
+    private final StartupRecovery recovery;
     private final AlphaProperties properties;
     private final OnlineProperties online;
 
     public StartupWiring(EventEngine engine, OnlineHandlers handlers, ExchangeGateway gateway,
                          OrderSender orderSender, ReconciliationRunner reconciliation,
-                         AlphaProperties properties, OnlineProperties online) {
+                         StartupRecovery recovery, AlphaProperties properties, OnlineProperties online) {
         this.engine = engine;
         this.handlers = handlers;
         this.gateway = gateway;
         this.orderSender = orderSender;
         this.reconciliation = reconciliation;
+        this.recovery = recovery;
         this.properties = properties;
         this.online = online;
     }
@@ -81,6 +92,9 @@ public class StartupWiring implements ApplicationRunner {
         } else {
             log.info("Trading disabled: reconciliation not started (no orders to reconcile)");
         }
+        // Enqueued after reconciliation's own loop task, so it verifies the book the exchange sync
+        // just corrected. Both run before the loop polls the external queue, hence before the first bar.
+        recovery.start();
         engine.scheduleRepeating(SnapshotSampler.TIMER, online.snapshotPeriod());
         log.info("Snapshot sampler scheduled every {} s", online.snapshotPeriod().toSeconds());
     }

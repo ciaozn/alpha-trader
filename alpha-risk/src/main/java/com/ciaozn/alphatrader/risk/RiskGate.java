@@ -15,6 +15,7 @@ import com.ciaozn.alphatrader.engine.EventPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -65,7 +66,11 @@ public final class RiskGate implements EventHandler {
     private final Portfolio portfolio;
     private final PositionSizer sizer;
     private final TradingRulesProvider tradingRules;
-    private final RiskPipeline pipeline;
+    /**
+     * The rule set, replaceable at runtime (T404, FR-RK-09). Volatile for the reason {@link #reload}
+     * documents: the swap is written from the reload thread and read from the loop.
+     */
+    private volatile RiskPipeline pipeline;
     private final Clock clock;
     private final RecordStore records;
     private long sequence;
@@ -86,6 +91,47 @@ public final class RiskGate implements EventHandler {
         this.pipeline = pipeline;
         this.clock = clock;
         this.records = records;
+    }
+
+    /**
+     * Replaces the rule set at runtime (T404, FR-RK-09 / SEC-03). The parameter values come from
+     * configuration; how they become rules is {@code RiskPipelines}' job, and validation happens where
+     * the new pipeline is built - an invalid configuration never reaches this method, so a failed
+     * reload leaves the previous rules in force rather than applying part of an edit.
+     *
+     * <p><b>Atomic, and only for signals that arrive afterwards.</b> The field is volatile, so the
+     * reference a signal reads is always one whole pipeline - old or new, never a half-swapped mix.
+     * A signal already being decided keeps the pipeline it read; the swap takes effect at the next
+     * {@link SignalEvent}. Swapping on the loop thread (as the reload endpoint does) makes that exact
+     * rather than merely safe: no signal can be mid-decision while the reference changes.
+     *
+     * <p><b>What it does not swap.</b> Rules that are also {@code EventHandler}s - the circuit breaker
+     * - were registered on the bus once at startup. This method changes what the gate consults; it does
+     * not change what the bus dispatches fills to. So after reloading a pipeline built with a fresh
+     * breaker, the gate's daily-loss check still reads the current account (it is re-observed on every
+     * signal), but the losing-streak counter lives on the old instance and can no longer advance. A
+     * deployment that needs to retune the breaker's stateful trigger should restart; the alternative -
+     * re-registering handlers under a running loop - would let a reload reorder dispatch, which is a
+     * worse failure than a restart.
+     */
+    public void reload(RiskPipeline replacement) {
+        if (replacement == null) {
+            throw new IllegalArgumentException("replacement pipeline must not be null: a null would"
+                    + " leave the gate with no rules at all, which is not a reload");
+        }
+        this.pipeline = replacement;
+        log.info("Risk pipeline reloaded on the engine thread: {} signal rule(s) [{}], {} order rule(s) [{}]",
+                replacement.signalRules().size(), ids(replacement.signalRules()),
+                replacement.orderRules().size(), ids(replacement.orderRules()));
+    }
+
+    /** The pipeline currently in force. Read for the audit record and by tests. */
+    public RiskPipeline pipeline() {
+        return pipeline;
+    }
+
+    private static String ids(List<? extends RiskRule> rules) {
+        return rules.stream().map(RiskRule::ruleId).reduce((a, b) -> a + ", " + b).orElse("");
     }
 
     @Override

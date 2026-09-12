@@ -1,6 +1,8 @@
 package com.ciaozn.alphatrader.app.config;
 
 import com.ciaozn.alphatrader.risk.PositionSizer;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.math.BigDecimal;
@@ -23,7 +25,8 @@ public record AlphaProperties(
         Risk risk,
         List<StrategyEntry> strategies,
         Backtest backtest,
-        Download download) {
+        Download download,
+        Reconciliation reconciliation) {
 
     public record Trading(boolean enabled) {
     }
@@ -65,6 +68,32 @@ public record AlphaProperties(
     }
 
     /**
+     * The {@code alpha.reconciliation} block (T405, FR-EX-05): what to do with a ghost position - one
+     * the exchange holds and this process has no record of. {@code Reconciler} always reports it
+     * CRITICAL; this switches only whether it also asks the OMS to flatten it.
+     *
+     * <p><b>Default off, and the default is the safety property.</b> A position we did not open may be
+     * one we do not understand - a manual trade on the same account, a second process, a partial
+     * deploy - so the honest default is to make noise and leave it alone. Turning this on is a
+     * deliberate choice that the only explanation for an unexplained position is a broken local
+     * record, and it belongs in yml where it can be seen rather than in code.
+     *
+     * <p><b>Auto-close goes through the OMS, never the gateway.</b> {@code Reconciler} stays free of
+     * network access and only emits an {@code OrderRequestEvent}; the normal order path writes the row,
+     * sends, and settles the fill. A reconciliation pass that called {@code placeOrder} directly would
+     * put an order in the world with no row behind it - invisible to the next pass and to recovery.
+     *
+     * <p>A primitive {@code boolean} rather than a {@code Boolean}: absent must mean false, and there
+     * is no "the operator did not say" state to distinguish here - unlike the risk levels, where an
+     * absent block must mean DESIGN §8 rather than "off".
+     */
+    public record Reconciliation(boolean autoCloseGhostPositions) {
+
+        /** What an absent block means: report ghosts, never close them. */
+        public static final Reconciliation DEFAULTS = new Reconciliation(false);
+    }
+
+    /**
      * The {@code alpha.risk} block (T302): the five rule levels of DESIGN §8 plus the sizing knob,
      * each with its own on/off switch (FR-RK-02..07, FR-RK-09's externalised parameters).
      *
@@ -79,7 +108,15 @@ public record AlphaProperties(
      * states them as percentages, so the yml says so too: reading "20" where the rule wants 0.20 is
      * a 100x error no rule test would catch, because the rule would simply be 100x loose and every
      * order would pass.
+     *
+     * <p><b>{@code @JsonNaming} here and on every nested block below is for the T404 reload endpoint,
+     * not for yml binding.</b> Spring's own binder is relaxed and reads {@code max-notional-fraction}
+     * regardless; Jackson is not, and the reload request body is Jackson. Making the API speak the same
+     * kebab-case keys as the file it edits is what stops an operator copying a key that binds in yml
+     * from silently binding to nothing over HTTP - a body read as all-defaults would report a successful
+     * reload that changed no limit. It has no effect on {@code @ConfigurationProperties}.
      */
+    @JsonNaming(PropertyNamingStrategies.KebabCaseStrategy.class)
     public record Risk(
             Account account,
             Order order,
@@ -99,6 +136,7 @@ public record AlphaProperties(
          * wiring that field in here would pass the orders that are about to be liquidated (取舍 12).
          * The exchange's number belongs to reconciliation, not to this rule.
          */
+        @JsonNaming(PropertyNamingStrategies.KebabCaseStrategy.class)
         public record Account(Boolean enabled, BigDecimal maxLeverage, BigDecimal minMarginRatio) {
 
             public static final Account DEFAULTS =
@@ -125,6 +163,7 @@ public record AlphaProperties(
          * the gate only ever sends MARKET, so the alternative is a rule that looks configured and
          * never fires.
          */
+        @JsonNaming(PropertyNamingStrategies.KebabCaseStrategy.class)
         public record Order(Boolean enabled, BigDecimal maxNotionalFraction, BigDecimal maxPriceDeviation) {
 
             public static final Order DEFAULTS =
@@ -151,6 +190,7 @@ public record AlphaProperties(
          * step at a time. Reducing a position can never be caught by these two - see
          * {@code OrderFacts}.
          */
+        @JsonNaming(PropertyNamingStrategies.KebabCaseStrategy.class)
         public record Portfolio(Boolean enabled,
                                BigDecimal maxTotalNotionalFraction,
                                BigDecimal maxSymbolNotionalFraction) {
@@ -184,6 +224,7 @@ public record AlphaProperties(
          * UTC day's opening equity" - and stops new openings for the rest of that UTC day;
          * {@code consecutiveLosses} closed losing trades pause trading for {@code pause}.
          */
+        @JsonNaming(PropertyNamingStrategies.KebabCaseStrategy.class)
         public record Breaker(Boolean enabled,
                              BigDecimal dailyLossFraction,
                              int consecutiveLosses,
@@ -218,6 +259,7 @@ public record AlphaProperties(
         }
 
         /** 频率级 (FR-RK-06): at most {@code maxOrders} inside a sliding {@code window}. */
+        @JsonNaming(PropertyNamingStrategies.KebabCaseStrategy.class)
         public record Frequency(Boolean enabled, int maxOrders, Duration window) {
 
             public static final Frequency DEFAULTS =
@@ -254,6 +296,7 @@ public record AlphaProperties(
          * signal may commit is a risk parameter, and paper/live must size exactly as the backtest
          * did or the backtest is not evidence about them (FR-BT-06).
          */
+        @JsonNaming(PropertyNamingStrategies.KebabCaseStrategy.class)
         public record Sizing(BigDecimal targetExposure) {
 
             public static final Sizing DEFAULTS = new Sizing(null);
@@ -444,6 +487,9 @@ public record AlphaProperties(
         }
         if (download == null) {
             download = Download.DEFAULTS;
+        }
+        if (reconciliation == null) {
+            reconciliation = Reconciliation.DEFAULTS;
         }
     }
 

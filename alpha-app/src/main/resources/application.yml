@@ -62,6 +62,14 @@ alpha:
     # an empty string to the record). Leave the whole block out and Risk normalizes it to
     # Sizing.DEFAULTS. It is coupled to max-notional-fraction above: a flip is one order of
     # 2 x target-exposure, so startup is refused unless max-notional-fraction >= 2 x target-exposure.
+  # 幽灵仓位处置 (T405, FR-EX-05): a position the exchange holds and this process has no record of.
+  # false (the default) reports it CRITICAL and leaves it alone - a position we did not open may be one
+  # we do not understand. true additionally has reconciliation return a MARKET order to flatten it,
+  # which travels the normal OMS path (row, send, fill) rather than calling the gateway directly.
+  # Declared here, in the file all profiles load, so an operator can see it without reading Java; it
+  # only ever fires in the online modes, because reconciliation is started only when trading is on.
+  reconciliation:
+    auto-close-ghost-positions: false
   # The kline store. Shared, so it lives in the shared file: the download profile writes it and the
   # backtest profile reads it, and Spring loads application-<profile>.yml only for the active
   # profile. Declaring it in application-backtest.yml would leave the download writing to the
