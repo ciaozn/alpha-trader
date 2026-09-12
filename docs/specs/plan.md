@@ -4,7 +4,7 @@
 |---|---|
 | 状态 | Approved v1.0 · **执行中**（2026-09-12：P0-P3 完成；**P4 全部完成 T401-T408**，含 Docker 镜像本机构建与容器内回测实测；**P5 可编码部分全部完成 T501-T505**；剩余 T321/T409/T406 联调/T506/T507 需用户凭据与真实资金） |
 | 创建日期 | 2026-09-08 |
-| 上游文档 | [spec.md](./spec.md)（Approved）· [docs/DESIGN.md](../../DESIGN.md) |
+| 上游文档 | [spec.md](./spec.md)（Approved）· [docs/DESIGN.md](../DESIGN.md) |
 | 开发方法 | SDD：本 plan 把 spec 的需求映射为有序的技术实施阶段 |
 | 任务清单 | [tasks.md](./tasks.md)（进行中/待办）· [tasks-archive-p0-p3.md](./tasks-archive-p0-p3.md)（已完成阶段归档） |
 

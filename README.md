@@ -15,7 +15,7 @@
 | P4 | 告警 / 状态接口 / 崩溃恢复 / 风控热更新 / OKX 网关 / Docker / 双数据库 | ✅ |
 | P5 | 实盘守卫（权益上限、前置校验、告警演练、净值日报） | ✅ 代码完成 |
 
-剩余未完成事项见 [tasks.md 的「阻塞与待办总表」](docs/specs/001-event-driven-trading-system/tasks.md)——
+剩余未完成事项见 [tasks.md 的「阻塞与待办总表」](docs/specs/tasks.md)——
 全部是需要 testnet 凭据、真实资金或真实时间的验收动作，不是代码问题。
 
 ## 快速开始
@@ -84,10 +84,27 @@ VPS 一键脚本见 [`deploy/install.sh`](deploy/install.sh)（安装 Docker、�
 | 想了解什么 | 去哪 |
 |---|---|
 | 系统设计：架构、事件模型、风控设计、里程碑 | [docs/DESIGN.md](docs/DESIGN.md) |
-| 需求：场景、功能需求、成功标准（WHAT/WHY） | [spec.md](docs/specs/001-event-driven-trading-system/spec.md) |
-| 实施计划：阶段划分、进度映射 | [plan.md](docs/specs/001-event-driven-trading-system/plan.md) |
-| 任务明细与执行日志（唯一状态权威） | [tasks.md](docs/specs/001-event-driven-trading-system/tasks.md) · [归档](docs/specs/001-event-driven-trading-system/tasks-archive-p0-p3.md) |
+| 需求：场景、功能需求、成功标准（WHAT/WHY） | [spec.md](docs/specs/spec.md) |
+| 实施计划：阶段划分、进度映射 | [plan.md](docs/specs/plan.md) |
+| 任务明细与执行日志（唯一状态权威） | [tasks.md](docs/specs/tasks.md) · [归档](docs/specs/tasks-archive-p0-p3.md) |
 | 环境变量清单 | [.env.example](.env.example) |
 
 开发流程是 SDD（spec → plan → tasks → 实现）；文档纪律：**状态只在 tasks.md 维护**，
 plan 里放指针；已完成阶段移入归档。
+
+### 为什么 spec / DESIGN 之外还需要 plan 和 tasks
+
+spec 与 DESIGN 描述的是系统的**终态**（WHAT/WHY/HOW），plan 与 tasks 描述的是**从零到终态的路径与当前位置**。
+四份文档回答四个不同的问题，也以四种不同的频率变化——混写在一起，要么执行状态污染稳定文档，
+要么稳定文档冻结了进度记录：
+
+| 文档 | 回答 | 变化频率 | 验收粒度 |
+|---|---|---|---|
+| spec | 做什么、为谁做、怎样算完成 | 需求变更才改 | 成功标准（SC-xx，终态） |
+| DESIGN | 技术上怎么做、为什么这样做 | 技术方案变更才改 | ——（由 plan 映射到任务） |
+| plan | 按什么顺序做、依赖关系、每阶段出口 | 阶段规划时定，之后基本不动 | 阶段出口验证 |
+| tasks | 现在做到哪、每一步怎么算做完、踩了什么坑 | 每天都在变 | ≤2 小时任务 + 逐条验收记录 |
+
+必要性各有侧重：**plan** 是需求与任务之间的映射层（防止「写了代码却不满足任何需求」和
+「需求没有对应任务」两类漏），并锁定构建顺序与取舍；**tasks** 是可执行状态（「完成」是逐条验收出来的，
+不是一种感觉），也是跨会话/跨人交接的唯一交接面。
