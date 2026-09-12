@@ -39,7 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * where a server is, exactly like the testnet-gated integration test. Locally:
  *
  * <pre>
- *   ALPHA_TEST_MYSQL_URL=jdbc:mysql://127.0.0.1:3307/alpha_trader \
+ *   ALPHA_TEST_MYSQL_URL=jdbc:mysql://127.0.0.1:3306/alpha_trader \
  *   ALPHA_TEST_MYSQL_USER=alpha ALPHA_TEST_MYSQL_PASSWORD=... mvn -pl alpha-app test -Dtest=MySqlStoreTest
  * </pre>
  *

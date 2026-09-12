@@ -27,7 +27,7 @@
 | T409 SC-03 七天连续运行 | testnet Key + 连续 7 天不中断 | P4 出口 |
 | T406 OKX demo 全链路联调 | OKX 凭据（`OKX_API_KEY/SECRET/PASSPHRASE`） | P4 |
 | ~~T407 Docker 镜像构建验证~~ | ✅ 2026-09-12 完成：colima + docker 在本机构建成功（`alpha-trader:local` 590MB / JRE 21.0.12），并在容器内跑通完整回测 | P4 |
-| ~~T408 MySQL 真实连接验证~~ | ✅ 2026-09-12 完成：brew 装 MySQL 26.7.0，独立实例跑在 127.0.0.1:3307，`MySqlStoreTest` 3/3 通过 | P4 |
+| ~~T408 MySQL 真实连接验证~~ | ✅ 2026-09-12 完成：brew MySQL 26.7.0 现为**持久实例**（launchd 托管、3306、开机自启），`MySqlStoreTest` 3/3 通过 | P4 |
 | T506 实盘启动（SEC-02 逐项签字 + 首笔链路） | 真实资金 + 实盘 Key | P5 出口 |
 | T507 SC-06 两周观察 | 真实时间（两周） | P5 出口 |
 
@@ -70,7 +70,7 @@
 | T405 | 幽灵仓位处置：补「配置选择自动平仓」分支（默认仍告警） | EX-05、plan P4-5 | 两种配置各自行为的单测 | ☑ 完成：Reconciler 幽灵仓位可选择自动平仓（默认仅告警），幂等 id 前缀 `ghost-close-` 防重复平仓 |
 | T406 | OkxSwapGateway：v5 行情 WS + 签名 REST（`OK-ACCESS-*` + HmacSHA256 base64）+ demo 头 | GW-06、plan P4-6 | 解析器与签名离线单测；demo 联调留用户 | ☑ 完成：`alpha.online.gateway=binance|okx` 接线（订阅循环对接口编程，加交易所未改装配逻辑）；签名/解析/客户端均有离线单测（9 例）+ 选择开关 2 例。**OKX demo 全链路联调留用户**（需 OKX 凭据） |
 | T407 | Docker：多阶段 Dockerfile + docker-compose（app + mysql）+ 部署脚本 | 部署、plan P4-7 | 镜像可构建；compose 与环境变量清单完整 | ☑ 完成：**本机构建成功**——colima（macOS Virtualization.Framework）+ docker 装好，`docker build` 23 步全过、耗时 8m40s，产物 `alpha-trader:local` 590MB；镜像内 JRE 21.0.12、app.jar 41M、无 mvn/源码残留（多阶段构建有效）；**并在容器内跑通完整回测**（挂载 `data/klines`，3649 根 K 线 / 0 缺口 / 175 笔成交 / 退出码 0 / 报告 153K 落盘），compose 文件 `docker compose config` 校验通过。**之前的「网络阻塞」结论是错的**，根因两层：①沙箱自带代理 `127.0.0.1:53730` 不路由外网（用户真代理是 `7897`）；②dockerd 不认 systemd 环境变量——VM 内 `daemon.json` 的 `proxies` 段（值为沙箱代理）优先级更高，把正确配置静默覆盖，表现为 502 Bad Gateway |
-| T408 | MySQL 8 数据源切换（本地仍 SQLite） | OP-04、plan P4-8 | 双 URL 配置解析单测；真实 MySQL 连接留用户 | ☑ 完成：①`StoreProperties.dialect()` + `StoreDataSource` 工厂（按 URL 分发，未知方言启动即失败）；②**对真实 MySQL 验证通过**（本机 MySQL 26.7.0，独立实例 3307）：六张表建得出、orders/fills 与四张历史表写回读全通；③首跑抓到真 bug——`CREATE INDEX IF NOT EXISTS` 是 SQLite 专有语法，MySQL 语法错误，「方言中立」此前只在 SQLite 上验证过，已改方言分支；④`MySqlStoreTest` 环境变量门控可重复执行（CI 跳过） |
+| T408 | MySQL 8 数据源切换（本地仍 SQLite） | OP-04、plan P4-8 | 双 URL 配置解析单测；真实 MySQL 连接留用户 | ☑ 完成：①`StoreProperties.dialect()` + `StoreDataSource` 工厂（按 URL 分发，未知方言启动即失败）；②**对真实 MySQL 验证通过**（本机 MySQL 26.7.0，持久实例 3306）：六张表建得出、orders/fills 与四张历史表写回读全通；③首跑抓到真 bug——`CREATE INDEX IF NOT EXISTS` 是 SQLite 专有语法，MySQL 语法错误，「方言中立」此前只在 SQLite 上验证过，已改方言分支；④`MySqlStoreTest` 环境变量门控可重复执行（CI 跳过） |
 | T409 | **SC-03 出口**：testnet 连续 7 天零差异、告警邮件按预期到达 | SC-03 | ⚠️ 需用户运行 | ⊘ 阻塞 |
 
 > **T321（P3 遗留）**：场景 2 模拟盘全链路联调，需 testnet API Key，同样标记为用户验收项。
