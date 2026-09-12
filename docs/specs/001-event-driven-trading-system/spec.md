@@ -4,7 +4,7 @@
 |---|---|
 | 状态 | Approved v1.0（2026-09-08 评审通过：告警渠道定为 QQ 邮箱，服务器数据库定为 MySQL） |
 | 创建日期 | 2026-09-08 |
-| 技术方案 | [docs/DESIGN.md](../../docs/DESIGN.md)（实现细节以该文档为准） |
+| 技术方案 | [docs/DESIGN.md](../../DESIGN.md)（实现细节以该文档为准） |
 | 开发方法 | SDD（Spec-Driven Development）：spec → plan → tasks → 实现 |
 
 > 本文档只定义 **WHAT / WHY**：做什么、为谁做、怎样算完成。

@@ -15,7 +15,7 @@
 | P4 | 告警 / 状态接口 / 崩溃恢复 / 风控热更新 / OKX 网关 / Docker / 双数据库 | ✅ |
 | P5 | 实盘守卫（权益上限、前置校验、告警演练、净值日报） | ✅ 代码完成 |
 
-剩余未完成事项见 [tasks.md 的「阻塞与待办总表」](specs/001-event-driven-trading-system/tasks.md)——
+剩余未完成事项见 [tasks.md 的「阻塞与待办总表」](docs/specs/001-event-driven-trading-system/tasks.md)——
 全部是需要 testnet 凭据、真实资金或真实时间的验收动作，不是代码问题。
 
 ## 快速开始
@@ -84,9 +84,9 @@ VPS 一键脚本见 [`deploy/install.sh`](deploy/install.sh)（安装 Docker、�
 | 想了解什么 | 去哪 |
 |---|---|
 | 系统设计：架构、事件模型、风控设计、里程碑 | [docs/DESIGN.md](docs/DESIGN.md) |
-| 需求：场景、功能需求、成功标准（WHAT/WHY） | [spec.md](specs/001-event-driven-trading-system/spec.md) |
-| 实施计划：阶段划分、进度映射 | [plan.md](specs/001-event-driven-trading-system/plan.md) |
-| 任务明细与执行日志（唯一状态权威） | [tasks.md](specs/001-event-driven-trading-system/tasks.md) · [归档](specs/001-event-driven-trading-system/tasks-archive-p0-p3.md) |
+| 需求：场景、功能需求、成功标准（WHAT/WHY） | [spec.md](docs/specs/001-event-driven-trading-system/spec.md) |
+| 实施计划：阶段划分、进度映射 | [plan.md](docs/specs/001-event-driven-trading-system/plan.md) |
+| 任务明细与执行日志（唯一状态权威） | [tasks.md](docs/specs/001-event-driven-trading-system/tasks.md) · [归档](docs/specs/001-event-driven-trading-system/tasks-archive-p0-p3.md) |
 | 环境变量清单 | [.env.example](.env.example) |
 
 开发流程是 SDD（spec → plan → tasks → 实现）；文档纪律：**状态只在 tasks.md 维护**，
