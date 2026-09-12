@@ -179,9 +179,13 @@ public class BacktestWiring implements ApplicationRunner {
      */
     private static long millis(Instant value, String property) {
         if (value == null) {
+            // The most common way to land here is running the jar/IDE with no profile chosen:
+            // application.yml defaults to backtest (the safe mode), and the safe mode needs a range.
             throw new IllegalStateException(property + " must be set (ISO-8601 instant, UTC): "
                     + "a backtest replays a stated range, and a range guessed wider than the stored "
-                    + "data would report the difference as gaps in the dataset");
+                    + "data would report the difference as gaps in the dataset. "
+                    + "Set both alpha.backtest.from and alpha.backtest.to, or - if you meant to run "
+                    + "the online service - activate the paper (or live) profile instead");
         }
         return value.toEpochMilli();
     }
