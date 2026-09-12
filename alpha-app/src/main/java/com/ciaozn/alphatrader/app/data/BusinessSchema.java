@@ -2,8 +2,11 @@ package com.ciaozn.alphatrader.app.data;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Locale;
 import java.util.List;
 
 /**
@@ -18,7 +21,7 @@ import java.util.List;
  * is. {@code IF NOT EXISTS} is what makes the construction order between the two stores irrelevant,
  * and what makes a restart over an existing file a no-op rather than a failure.
  *
- * <p><b>Dialect-neutral by construction</b> - SQLite for local development, MySQL 8 on the server,
+ * <p><b>Dialect-neutral for the tables, branched for the indexes</b> - SQLite for local development, MySQL 8 on the server,
  * no migration tool, tested only against SQLite until P4-8 (取舍 15). That rules out: reserved words
  * as column names ({@code order_status} not {@code status}, {@code rule_level} not {@code level},
  * {@code interval_code} in the klines table for the same reason); dialect-specific upsert; and
@@ -199,33 +202,42 @@ final class BusinessSchema {
      * to handle. None of these are UNIQUE - every signal on one bar shares a timestamp, and a unique
      * index here would turn a normal run into a constraint failure.
      */
-    private static final String IDX_SIGNALS_TS =
-            "CREATE INDEX IF NOT EXISTS idx_signals_business_ts ON signals (business_ts)";
+    /**
+     * An index to create if it is not there yet.
+     *
+     * <p>Structured rather than a SQL string because the statement is not portable: SQLite accepts
+     * {@code CREATE INDEX IF NOT EXISTS}, MySQL rejects it outright (syntax error). The first version
+     * of this class used the SQLite form and passed every test it had - because every one of them ran
+     * on SQLite. Running the schema against a real MySQL server (T408) failed on the very first
+     * statement, which is the argument for integration tests that a "dialect-neutral" claim needs.
+     */
+    private record Index(String name, String table, String columns) {
 
-    private static final String IDX_INTERCEPTIONS_RULE =
-            "CREATE INDEX IF NOT EXISTS idx_interceptions_rule_id ON risk_interceptions (rule_id)";
+        String ddl() {
+            return "CREATE INDEX " + name + " ON " + table + " (" + columns + ")";
+        }
+    }
 
-    private static final String IDX_INTERCEPTIONS_TS =
-            "CREATE INDEX IF NOT EXISTS idx_interceptions_business_ts ON risk_interceptions (business_ts)";
+    /**
+     * The two products this schema is written for. Anything else fails loudly: an unknown engine may
+     * accept the table DDL and then behave differently in ways no test here would catch.
+     */
+    private enum Dialect {
+        SQLITE,
+        MYSQL
+    }
 
-    private static final String IDX_EQUITY_TS =
-            "CREATE INDEX IF NOT EXISTS idx_equity_business_ts ON equity_snapshot (business_ts)";
-
-    private static final String IDX_POSITIONS_TS =
-            "CREATE INDEX IF NOT EXISTS idx_positions_business_ts ON positions (business_ts)";
-
-    private static final String IDX_FILLS_ORDER =
-            "CREATE INDEX IF NOT EXISTS idx_fills_client_order_id ON fills (client_order_id)";
-
-    private static final String IDX_ORDERS_STATUS =
-            "CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (order_status)";
+    private static final List<Index> INDEXES = List.of(
+            new Index("idx_orders_status", "orders", "order_status"),
+            new Index("idx_fills_client_order_id", "fills", "client_order_id"),
+            new Index("idx_signals_business_ts", "signals", "business_ts"),
+            new Index("idx_interceptions_rule_id", "risk_interceptions", "rule_id"),
+            new Index("idx_interceptions_business_ts", "risk_interceptions", "business_ts"),
+            new Index("idx_equity_business_ts", "equity_snapshot", "business_ts"),
+            new Index("idx_positions_business_ts", "positions", "business_ts"));
 
     private static final List<String> STATEMENTS =
             List.of(ORDERS, FILLS, SIGNALS, EQUITY_SNAPSHOT, POSITIONS, RISK_INTERCEPTIONS);
-
-    private static final List<String> INDEXES = List.of(IDX_ORDERS_STATUS, IDX_FILLS_ORDER,
-            IDX_SIGNALS_TS, IDX_INTERCEPTIONS_RULE, IDX_INTERCEPTIONS_TS, IDX_EQUITY_TS,
-            IDX_POSITIONS_TS);
 
     private BusinessSchema() {
     }
@@ -236,12 +248,43 @@ final class BusinessSchema {
             for (String create : STATEMENTS) {
                 statement.execute(create);
             }
-            for (String index : INDEXES) {
-                statement.execute(index);
+            Dialect dialect = dialectOf(connection);
+            for (Index index : INDEXES) {
+                // Checked rather than "IF NOT EXISTS": that clause exists in SQLite and not in MySQL,
+                // and asking the catalog is the only form both engines agree on.
+                if (!indexExists(connection, dialect, index.name())) {
+                    statement.execute(index.ddl());
+                }
             }
         } catch (SQLException e) {
             throw new IllegalStateException("Business schema failure while creating the six tables of "
                     + "DESIGN §11 and their indexes (sqlState " + e.getSQLState() + ")", e);
+        }
+    }
+
+    private static Dialect dialectOf(Connection connection) throws SQLException {
+        String product = connection.getMetaData().getDatabaseProductName().toLowerCase(Locale.ROOT);
+        if (product.contains("mysql")) {
+            return Dialect.MYSQL;
+        }
+        if (product.contains("sqlite")) {
+            return Dialect.SQLITE;
+        }
+        throw new IllegalStateException("Unsupported database '" + product
+                + "': this schema is written for SQLite and MySQL (T408)");
+    }
+
+    private static boolean indexExists(Connection connection, Dialect dialect, String indexName)
+            throws SQLException {
+        String sql = dialect == Dialect.MYSQL
+                ? "SELECT 1 FROM information_schema.statistics WHERE table_schema = database()"
+                        + " AND index_name = ?"
+                : "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, indexName);
+            try (ResultSet rows = statement.executeQuery()) {
+                return rows.next();
+            }
         }
     }
 }
