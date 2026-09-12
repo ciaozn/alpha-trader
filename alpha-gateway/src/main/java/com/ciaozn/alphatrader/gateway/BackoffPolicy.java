@@ -1,8 +1,11 @@
-package com.ciaozn.alphatrader.gateway.binance;
+package com.ciaozn.alphatrader.gateway;
 
 /**
- * Exponential reconnect backoff (FR-GW-02): 1s, 2s, 4s ... capped at 60s.
- * Reset on every successful connection.
+ * Exponential reconnect backoff (FR-GW-02): 1s, 2s, 4s ... capped at 60s, reset after a
+ * successful connection.
+ *
+ * <p>Lives in the shared gateway package rather than under {@code binance} because both exchange
+ * adapters reconnect the same way - the policy is a property of networks, not of an API.
  */
 public final class BackoffPolicy {
 

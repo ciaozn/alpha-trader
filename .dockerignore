@@ -1,0 +1,20 @@
+# Everything the build does not need. Keeping the context small is not cosmetic: `COPY . .`
+# would otherwise pull in target/ and .git/ on every build.
+.git/
+.github/
+.workbuddy/
+target/
+*/target/
+.idea/
+*.iml
+.vscode/
+.DS_Store
+logs/
+data/
+reports/
+.env
+*.db
+*.sqlite
+docs/
+specs/
+README.md

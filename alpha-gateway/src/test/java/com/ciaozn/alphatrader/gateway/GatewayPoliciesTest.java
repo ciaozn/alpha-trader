@@ -1,7 +1,7 @@
 package com.ciaozn.alphatrader.gateway;
 
 import com.ciaozn.alphatrader.common.time.VirtualClock;
-import com.ciaozn.alphatrader.gateway.binance.BackoffPolicy;
+import com.ciaozn.alphatrader.gateway.BackoffPolicy;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;

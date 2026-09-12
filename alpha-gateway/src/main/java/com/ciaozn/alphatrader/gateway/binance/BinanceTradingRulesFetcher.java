@@ -1,5 +1,6 @@
 package com.ciaozn.alphatrader.gateway.binance;
 
+import com.ciaozn.alphatrader.gateway.BackoffPolicy;
 import com.ciaozn.alphatrader.common.model.FixedTradingRulesProvider;
 import com.ciaozn.alphatrader.common.model.Symbol;
 import com.ciaozn.alphatrader.common.model.TradingRules;
