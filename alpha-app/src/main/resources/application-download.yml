@@ -1,3 +1,9 @@
+spring:
+  main:
+    # No web container: these profiles run one job and exit. Letting a server start
+    # here would hold the JVM open after the job finished (T402 guard).
+    web-application-type: none
+
 alpha:
   mode: download
   # Download: the public klines endpoint, so no credentials, no engine, no gateway and no strategy.
