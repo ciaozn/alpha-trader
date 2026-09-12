@@ -86,7 +86,7 @@ VPS 一键脚本见 [`deploy/install.sh`](deploy/install.sh)（安装 Docker、�
 | 系统设计：架构、事件模型、风控设计、里程碑 | [docs/DESIGN.md](docs/DESIGN.md) |
 | 需求：场景、功能需求、成功标准（WHAT/WHY） | [spec.md](docs/specs/spec.md) |
 | 实施计划：阶段划分、进度映射 | [plan.md](docs/specs/plan.md) |
-| 任务明细与执行日志（唯一状态权威） | [tasks.md](docs/specs/tasks.md) · [归档](docs/specs/tasks-archive-p0-p3.md) |
+| 任务明细与执行日志（唯一状态权威） | [tasks.md](docs/specs/tasks.md)（含文末 P0-P3 历史归档） |
 | 环境变量清单 | [.env.example](.env.example) |
 
 开发流程是 SDD（spec → plan → tasks → 实现）；文档纪律：**状态只在 tasks.md 维护**，

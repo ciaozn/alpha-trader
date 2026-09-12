@@ -6,7 +6,7 @@
 | 创建日期 | 2026-09-08 |
 | 上游文档 | [spec.md](./spec.md)（Approved）· [docs/DESIGN.md](../DESIGN.md) |
 | 开发方法 | SDD：本 plan 把 spec 的需求映射为有序的技术实施阶段 |
-| 任务清单 | [tasks.md](./tasks.md)（进行中/待办）· [tasks-archive-p0-p3.md](./tasks-archive-p0-p3.md)（已完成阶段归档） |
+| 任务清单 | [tasks.md](./tasks.md)（当前任务在前，P0-P3 历史在文末） |
 
 > 本文档定义 **实施顺序与任务映射**：先做什么、后做什么、每个阶段交付什么、怎么验证。
 > 阶段设计原则：**每个阶段结束系统都处于可运行、可验证状态**，不留"烂尾中间态"。
