@@ -32,7 +32,14 @@ class GatewayWiringTest {
     @Test
     void anAbsentPropertyDefaultsToBinance() {
         // The default must be the exchange the rest of the project was built and verified against.
-        assertThat(new OnlineProperties(null, null, null).gateway())
+        assertThat(new OnlineProperties(null, null, null, null).gateway())
                 .isEqualTo(OnlineProperties.GatewayType.BINANCE);
+    }
+
+    @Test
+    void anAbsentEquityCapDefaultsToTheSpecCeiling() {
+        // SC-06: 1000 USDT, not "unlimited" - an unset property must fail safe.
+        assertThat(new OnlineProperties(null, null, null, null).maxEquity())
+                .isEqualByComparingTo(OnlineProperties.DEFAULT_MAX_EQUITY);
     }
 }

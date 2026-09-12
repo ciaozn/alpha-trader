@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |---|---|
-| 状态 | **P0-P3 已完成**；**P4 编码完成**（出口验收 T409 与两处联调需用户凭据）；**P5 进行中**：T501-T504 由我实现，T505 待办，T506-T508 需用户执行 |
+| 状态 | **P0-P3 已完成**；**P4 编码完成**（T409 与两处联调需用户凭据）；**P5：T501-T504 已完成**（实盘守卫/前置校验/告警演练/净值日报），T505 待办（缺回测信号导出），T506-T508 需用户执行 |
 | 创建日期 | 2026-09-09 |
 | 最近更新 | 2026-09-12（瘦身：已完成阶段移入归档） |
 | 上游文档 | [plan.md](./plan.md)（Approved）· [spec.md](./spec.md)（Approved） |
@@ -52,10 +52,10 @@
 
 | # | 任务 | 对应 spec / plan | 验收 | 状态 |
 |---|---|---|---|---|
-| T501 | 实盘资金上限守卫：`alpha.online.max-equity`（默认 1000 USDT）在 live 模式作为一条风控规则接入管道，权益超过上限即拒绝开仓（`RK-00-live-cap`）——防的是「账户里多了钱，仓位跟着变大」这件没人盯着的事 | SC-06、plan P5-1 | 单测：超限拒绝 / 限内放行 / 减仓单不被拦；缺省值 1000 | ☐ |
-| T502 | 启动前置校验 `PreflightChecks`：密钥存在性、testnet 与 profile 是否自相矛盾、时钟偏移、交易规则是否已缓存、告警通道是否可用，加 SEC-02 手工项提醒；输出 PASS/FAIL/SKIP 清单 | SEC-02、边界 8 | 单测：每项失败的独立信息；清单可读 | ☐ |
-| T503 | 告警演练：`POST /api/alert/test` 发一封测试邮件（返回 sent/skipped/detail），live 启动时自动演练一次 | OP-03、plan P5-1 | 容器测试：未启用→skipped；启用→走传输层；失败不影响引擎 | ☐ |
-| T504 | 每日净值日报：从 `equity_snapshot` 汇总（当日 P&L、累计收益、最大回撤、快照数）→ 邮件，按日定时发送 | plan P5-4、SC-06 | 单测：给定快照序列数字正确；空数据不抛异常 | ☐ |
+| T501 | 实盘资金上限守卫：`alpha.online.max-equity`（默认 1000 USDT）在 live 模式作为一条风控规则接入管道，权益超过上限即拒绝开仓（`RK-00-live-cap`）——防的是「账户里多了钱，仓位跟着变大」这件没人盯着的事 | SC-06、plan P5-1 | 单测：超限拒绝 / 限内放行 / 减仓单不被拦；缺省值 1000 | ☑ 完成：`LiveEquityCapRule`（`RK-00-live-cap`）仅在 live profile 接入管道，作为 leading rule 先于其他规则拒绝；加仓拦、减仓/平仓放行（6 例单测）；`alpha.online.max-equity` 缺省 1000 USDT |
+| T502 | 启动前置校验 `PreflightChecks`：密钥存在性、testnet 与 profile 是否自相矛盾、时钟偏移、交易规则是否已缓存、告警通道是否可用，加 SEC-02 手工项提醒；输出 PASS/FAIL/SKIP 清单 | SEC-02、边界 8 | 单测：每项失败的独立信息；清单可读 | ☑ 完成：`PreflightChecks` + `PreflightRunner`（@Order 3）六项清单；两个「说出来才有意义」的一致性检查：live 指向 testnet、paper 指向实盘（8 例单测） |
+| T503 | 告警演练：`POST /api/alert/test` 发一封测试邮件（返回 sent/skipped/detail），live 启动时自动演练一次 | OP-03、plan P5-1 | 容器测试：未启用→skipped；启用→走传输层；失败不影响引擎 | ☑ 完成：`AlertDrill`（SENT/SKIPPED/FAILED，失败带原因不抛）+ `POST /api/alert/test` + live 启动按 `alpha.alert.drill-on-startup` 自动演练（3 例单测） |
+| T504 | 每日净值日报：从 `equity_snapshot` 汇总（当日 P&L、累计收益、最大回撤、快照数）→ 邮件，按日定时发送 | plan P5-4、SC-06 | 单测：给定快照序列数字正确；空数据不抛异常 | ☑ 完成：`DailyEquityReport`（当日 P&L、百分比、日内最大回撤、快照数；半开 UTC 窗口；空日不产出，6 例单测）+ `DailyReportScheduler`（05:00 UTC，无样本时发「NO SAMPLES」而不是 0 收益） |
 | T505 | SC-05 同构一致性抽查：同一时间窗内比较「库内信号序列」与参考序列（策略/标的/方向/bar 时间），输出一致/缺失/多出 | SC-05、plan P5-3 | ☐ **待办**：回测侧目前不导出信号（`BacktestReport` 只有成交与挂单），要先让回测把信号写到可比对的地方，否则这个比对只能做一半——不做半成品 | ☐ |
 | T506 | 实盘启动：SEC-02 逐项手工签字 + 首笔实盘信号链路正确 | SC-06、plan P5-2 | ⚠️ 需真实资金与实盘凭据 | ⊘ 阻塞 |
 | T507 | SC-06 两周观察：每日对账记录 + 净值跟踪，无异常方可加仓 | SC-06、plan P5-4 | ⚠️ 需真实时间 | ⊘ 阻塞 |
@@ -71,3 +71,4 @@
 > 更早的执行日志见 [归档](./tasks-archive-p0-p3.md)。
 | 2026-09-12 10:30 | **P4 收尾（T401-T408）** | 全部走完，`mvn clean verify` 全绿、**710 用例 0 失败**。T401 邮件告警、T402 状态接口（夜里已完成并验证）、T403 崩溃恢复（`JournalReplay`+`StartupRecovery`）、T404 风控热更新（`RiskGate.reload`+二次确认接口）、T405 幽灵仓位可选自动平仓、T406 OKX 网关（签名/REST/行情/四个解析器）、T407 Docker 部署文件、T408 双数据库方言。**值得记住的一次错误**：OKX 签名我按记忆写成「不含 query string」，还配了测试把错误信念钉住——查官方文档后确认预映像必须包含 query（官方示例 `/api/v5/account/balance?ccy=BTC`），已一并修正实现、测试与 javadoc。**遗留**：T406 只差 app 级网关选择接线；T407 镜像未实际构建（本机无 Docker）；T409/T321 需 testnet 凭据。 |
 | 2026-09-12 10:45 | T406 补齐 app 级网关接线（`alpha.online.gateway=binance\|okx`） | 通过：`GatewayWiringConfig` 的订阅循环改为面向 `ExchangeGateway` 接口，新增 `GatewayWiringTest` 2 例断言属性真的选中实现（此前 OKX 网关「有测试但无法启用」——与 T319 之前在线链路的情形同型）。app 模块 184 用例全绿 |
+| 2026-09-12 10:40 | **P5 可编码部分完成（T501-T504）** | 通过：`mvn clean verify` 全绿、**736 用例 0 失败**。T501 实盘权益上限（live-only，作为 leading rule 先于其他规则；加仓拦、减仓放行）；T502 启动前置校验六项，其中「live 指向 testnet」与「paper 指向实盘」两个静默配置错误是本任务真正的价值；T503 告警演练（接口 + live 启动自动，失败给原因不抛异常）；T504 每日净值日报（半开 UTC 窗口、日内回撤、空日发「NO SAMPLES」而非 0 收益）。**T505 未做**：回测报告不导出信号（只有成交/挂单），比对只能做一半，不做半成品——已在任务里写明缺的桥是什么。**过程中修了自己一个错**：新增 `AlertDrill` 忘了声明 bean，容器启动即失败，被 paper 容器测试抓住（这正是那类测试存在的意义）。 |

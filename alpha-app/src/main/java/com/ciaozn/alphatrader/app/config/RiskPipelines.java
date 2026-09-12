@@ -50,7 +50,17 @@ public final class RiskPipelines {
     }
 
     public static RiskPipeline of(AlphaProperties.Risk risk, Portfolio portfolio) {
-        List<SignalRule> signalRules = new ArrayList<>();
+        return of(risk, portfolio, List.of());
+    }
+
+    /**
+     * @param leadingRules checked before every configured rule. Used by the live equity cap (T501):
+     *                     an account over its ceiling must be refused for that reason, not for some
+     *                     smaller one that happens to be checked first.
+     */
+    public static RiskPipeline of(AlphaProperties.Risk risk, Portfolio portfolio,
+                                  List<SignalRule> leadingRules) {
+        List<SignalRule> signalRules = new ArrayList<>(leadingRules);
         if (risk.account().enabled()) {
             AlphaProperties.Risk.Account account = risk.account();
             signalRules.add(new AccountRule(account.maxLeverage(), account.minMarginRatio()));

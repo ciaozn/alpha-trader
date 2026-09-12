@@ -2,6 +2,7 @@ package com.ciaozn.alphatrader.app.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 
 /**
@@ -13,10 +14,13 @@ import java.time.Duration;
  * months will want to make themselves.
  */
 @ConfigurationProperties(prefix = "alpha.online")
-public record OnlineProperties(Duration reconcilePeriod, Duration snapshotPeriod, GatewayType gateway) {
+public record OnlineProperties(Duration reconcilePeriod, Duration snapshotPeriod, GatewayType gateway,
+                               BigDecimal maxEquity) {
 
     public static final Duration DEFAULT_RECONCILE_PERIOD = Duration.ofSeconds(60);
     public static final Duration DEFAULT_SNAPSHOT_PERIOD = Duration.ofSeconds(60);
+    /** SC-06: the live account starts at 1000 USDT and stays there until two clean weeks pass. */
+    public static final BigDecimal DEFAULT_MAX_EQUITY = new BigDecimal("1000");
 
     /**
      * Which exchange the online modes attach to (FR-GW-06). A property rather than a compile-time
@@ -38,6 +42,9 @@ public record OnlineProperties(Duration reconcilePeriod, Duration snapshotPeriod
         }
         if (gateway == null) {
             gateway = GatewayType.BINANCE;
+        }
+        if (maxEquity == null) {
+            maxEquity = DEFAULT_MAX_EQUITY;
         }
     }
 }

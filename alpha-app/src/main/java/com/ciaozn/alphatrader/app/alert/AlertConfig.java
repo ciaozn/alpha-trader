@@ -139,4 +139,14 @@ public class AlertConfig {
                                     Clock clock) {
         return new AlertDispatcher(properties, transport, throttle, alertExecutor, clock);
     }
+
+    /**
+     * The drill (T503). Wired here rather than annotated on the class because it needs the transport
+     * this configuration chose: a drill that picked its own transport could pass while the alerts
+     * went nowhere.
+     */
+    @Bean
+    AlertDrill alertDrill(AlertProperties properties, AlertTransport transport) {
+        return new AlertDrill(properties, transport);
+    }
 }

@@ -14,6 +14,7 @@ import com.ciaozn.alphatrader.execution.OrderStore;
 import com.ciaozn.alphatrader.execution.Reconciler;
 import com.ciaozn.alphatrader.execution.ReconciliationRunner;
 import com.ciaozn.alphatrader.gateway.ExchangeGateway;
+import com.ciaozn.alphatrader.risk.LiveEquityCapRule;
 import com.ciaozn.alphatrader.risk.OrderRule;
 import com.ciaozn.alphatrader.risk.PositionSizer;
 import com.ciaozn.alphatrader.risk.RecordStore;
@@ -29,6 +30,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.context.annotation.Profile;
+import org.springframework.core.env.Environment;
 
 import javax.sql.DataSource;
 import java.util.ArrayList;
@@ -93,8 +95,18 @@ public class OnlineWiringConfig {
     }
 
     @Bean
-    RiskPipeline riskPipeline(AlphaProperties properties, Portfolio portfolio) {
-        return RiskPipelines.of(properties.risk(), portfolio);
+    RiskPipeline riskPipeline(AlphaProperties properties, Portfolio portfolio, OnlineProperties online,
+                              Environment environment) {
+        // T501: the equity ceiling only exists where real money does. On testnet the faucet decides
+        // the balance and a 1000 USDT cap would simply stop the simulated run from trading.
+        List<SignalRule> leading = environment.matchesProfiles("live")
+                ? List.of(new LiveEquityCapRule(online.maxEquity()))
+                : List.of();
+        if (!leading.isEmpty()) {
+            log.info("Live equity cap armed: new exposure refused above {} USDT (SC-06)",
+                    online.maxEquity().toPlainString());
+        }
+        return RiskPipelines.of(properties.risk(), portfolio, leading);
     }
 
     @Bean
