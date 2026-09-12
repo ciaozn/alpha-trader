@@ -35,6 +35,8 @@ ENV SPRING_PROFILES_ACTIVE=paper
 EXPOSE 8080
 VOLUME ["/app/logs", "/app/data"]
 
-# exec form via sh -c so JAVA_OPTS is expanded; PID 1 is the JVM, so SIGTERM reaches the
-# context shutdown hook and StopWiring stops the engine, the sender and reconciliation.
+# exec form via sh -c so JAVA_OPTS is expanded; PID 1 is the JVM, so SIGTERM reaches the Spring
+# context shutdown hook, which runs each bean's destroy method: EventEngine.stop (ends the loop and
+# closes the journal), OrderSender.close (drains the queue), ReconciliationRunner.close,
+# BinanceFuturesGateway.close (closes the sockets and tears the listenKey down).
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]

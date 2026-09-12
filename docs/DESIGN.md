@@ -1,7 +1,8 @@
 # Alpha Trader 技术方案
 
 > 基于事件驱动架构的量化交易系统 · Java 21 + Spring Boot 3 · Binance/OKX U 本位永续合约
-> 版本 v1.0 · 2026-09-08
+> 版本 v1.1 · 2026-09-12（本次修订：业务库四张表 → 六张表；架构图告警渠道由「Telegram/钉钉」"
+              "更正为已实现的「QQ 邮箱 SMTP」——这两处是设计文档与实现漂移，改的是文档。v1.0 · 2026-09-08 初稿）
 
 ---
 
@@ -26,7 +27,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        alpha-app (Spring Boot)                  │
-│   配置装配 │ REST 监控 │ Actuator │ 告警机器人(Telegram/钉钉)     │
+│   配置装配 │ REST 监控 │ Actuator │ 邮件告警(QQ SMTP，异步+节流)   │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
 ┌──────────────┐   ┌───────────▼────────────┐   ┌────────────────┐
@@ -275,7 +276,7 @@ NEW → SUBMITTED → PARTIALLY_FILLED → FILLED
 ## 11. 持久化与监控
 
 - **事件日志**：`logs/events-YYYYMMDD.jsonl`，append-only，回放/审计/排障三用；
-- **业务库**：SQLite（本地开发）/ MySQL 8（服务器）四张表 —— `orders`、`fills`、`signals`、`equity_snapshot`；
+- **业务库**：SQLite（本地开发）/ MySQL 8（服务器）六张表 —— `orders`、`fills`、`signals`、`equity_snapshot`、`positions`、`risk_interceptions`；
 - **监控**：Spring Actuator + 自建 `/api/status`（持仓/权益/引擎心跳/各网关延迟）；
 - **告警**：邮件推送（QQ 邮箱 SMTP → ciaozn@qq.com，异步发送不阻塞事件循环 + 同类告警聚合节流）：成交通知、风控拦截、熔断、断线重连、对账异常。
 

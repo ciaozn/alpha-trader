@@ -4,3 +4,15 @@ alpha:
   trading:
     # P5 only. Requires: API key with withdrawals DISABLED + IP whitelist (FR-SEC-02).
     enabled: false
+
+alert:
+  # A drill is a real email: off everywhere except live, where an undetected broken channel is the
+  # thing that costs money (T503). POST /api/alert/test does the same on demand.
+  drill-on-startup: true
+
+online:
+  # binance | okx (T406). Live trades wherever this points, so it is spelled out here rather than
+  # left to the shared default.
+  gateway: ${ALPHA_GATEWAY:binance}
+  # SC-06 ceiling: new exposure is refused above this equity. Raise it only after two clean weeks.
+  max-equity: 1000

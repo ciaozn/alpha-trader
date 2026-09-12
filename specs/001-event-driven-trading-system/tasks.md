@@ -13,6 +13,40 @@
 
 ---
 
+## 阻塞与待办总表（唯一权威清单）
+
+> 这里是全项目**唯一**的未完成事项清单：`tasks.md` 的表格记录任务详情，本表回答「现在卡在哪、卡在谁手上」。
+> 每次状态变化都必须同步这张表——分散在两处的清单迟早会互相矛盾。
+
+### A. 阻塞项（需外部条件，非代码问题）
+
+| 项 | 需要什么 | 出处 |
+|---|---|---|
+| T112 断网 60 秒恢复联调 | 可人为断网并恢复的网络环境 | P1 遗留 |
+| T321 场景 2 模拟盘全链路 | Binance testnet API Key（`BINANCE_API_KEY/SECRET`） | P3 出口 |
+| T409 SC-03 七天连续运行 | testnet Key + 连续 7 天不中断 | P4 出口 |
+| T406 OKX demo 全链路联调 | OKX 凭据（`OKX_API_KEY/SECRET/PASSPHRASE`） | P4 |
+| T407 Docker 镜像构建验证 | 一台装了 Docker 的机器（本机没有） | P4 |
+| T408 MySQL 真实连接验证 | 可连的 MySQL 8 实例（或同一台 Docker 机器） | P4 |
+| T506 实盘启动（SEC-02 逐项签字 + 首笔链路） | 真实资金 + 实盘 Key | P5 出口 |
+| T507 SC-06 两周观察 | 真实时间（两周） | P5 出口 |
+
+### B. 待办项（不阻塞，可继续做）
+
+| 项 | 前置条件 | 备注 |
+|---|---|---|
+| T505 SC-05 同构一致性抽查 | **需先补一座桥**：`BacktestReport` 目前只导出成交/挂单，不导出信号；比对的两端必须都是信号序列 | 桥补完再加比对逻辑，估计半小时；不做半成品 |
+
+### 已修复但值得记住的漂移（2026-09-12）
+
+| 漂移 | 真相 |
+|---|---|
+| `application-live.yml` 未配 `alpha.alert.drill-on-startup`，而 `AlertDrillRunner` 的注释声称 live 默认开启 | 已补配置：注释与配置必须一起改，否则「说过的话」和「做的事」不一致 |
+| `Dockerfile` 注释引用了不存在的 `StopWiring` 类 | 实际停机机制是各 bean 的 destroy 方法（引擎 stop、sender close、网关 close），注释已改为真实机制 |
+| `docs/DESIGN.md` 写「四张表」「告警用 Telegram/钉钉」 | 实现是六张表 + QQ 邮箱 SMTP；设计文档已升到 v1.1 并记录本次修订 |
+
+---
+
 ## 阶段进度
 
 | 阶段 | 状态 | 出口验证 | 证据 |
@@ -72,3 +106,4 @@
 | 2026-09-12 10:30 | **P4 收尾（T401-T408）** | 全部走完，`mvn clean verify` 全绿、**710 用例 0 失败**。T401 邮件告警、T402 状态接口（夜里已完成并验证）、T403 崩溃恢复（`JournalReplay`+`StartupRecovery`）、T404 风控热更新（`RiskGate.reload`+二次确认接口）、T405 幽灵仓位可选自动平仓、T406 OKX 网关（签名/REST/行情/四个解析器）、T407 Docker 部署文件、T408 双数据库方言。**值得记住的一次错误**：OKX 签名我按记忆写成「不含 query string」，还配了测试把错误信念钉住——查官方文档后确认预映像必须包含 query（官方示例 `/api/v5/account/balance?ccy=BTC`），已一并修正实现、测试与 javadoc。**遗留**：T406 只差 app 级网关选择接线；T407 镜像未实际构建（本机无 Docker）；T409/T321 需 testnet 凭据。 |
 | 2026-09-12 10:45 | T406 补齐 app 级网关接线（`alpha.online.gateway=binance\|okx`） | 通过：`GatewayWiringConfig` 的订阅循环改为面向 `ExchangeGateway` 接口，新增 `GatewayWiringTest` 2 例断言属性真的选中实现（此前 OKX 网关「有测试但无法启用」——与 T319 之前在线链路的情形同型）。app 模块 184 用例全绿 |
 | 2026-09-12 10:40 | **P5 可编码部分完成（T501-T504）** | 通过：`mvn clean verify` 全绿、**736 用例 0 失败**。T501 实盘权益上限（live-only，作为 leading rule 先于其他规则；加仓拦、减仓放行）；T502 启动前置校验六项，其中「live 指向 testnet」与「paper 指向实盘」两个静默配置错误是本任务真正的价值；T503 告警演练（接口 + live 启动自动，失败给原因不抛异常）；T504 每日净值日报（半开 UTC 窗口、日内回撤、空日发「NO SAMPLES」而非 0 收益）。**T505 未做**：回测报告不导出信号（只有成交/挂单），比对只能做一半，不做半成品——已在任务里写明缺的桥是什么。**过程中修了自己一个错**：新增 `AlertDrill` 忘了声明 bean，容器启动即失败，被 paper 容器测试抓住（这正是那类测试存在的意义）。 |
+| 2026-09-12 11:15 | 落盘与漂移修正（无代码逻辑变更） | ①`tasks.md` 新增**「阻塞与待办总表」**作为全项目唯一未完成清单（8 项阻塞 + 1 项待办 + 3 条已修复漂移），并写进项目 MEMORY.md；②修正三处「说的和做的不一致」：`application-live.yml` 补 `alpha.alert.drill-on-startup: true`（此前代码注释声称 live 默认开启但配置缺项）、`Dockerfile` 注释不再引用不存在的 `StopWiring` 类、`docs/DESIGN.md` 升 v1.1（四张表→六张表、告警渠道 Telegram/钉钉→QQ SMTP）；③把「读契约→小步实现→模块测试→全量验证→提交→落盘」这套闭环存成可复用技能 `java-sdd-task-loop`。`mvn clean verify` 仍全绿 |
