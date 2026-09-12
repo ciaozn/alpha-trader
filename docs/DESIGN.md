@@ -1,8 +1,9 @@
 # Alpha Trader 技术方案
 
 > 基于事件驱动架构的量化交易系统 · Java 21 + Spring Boot 3 · Binance/OKX U 本位永续合约
-> 版本 v1.1 · 2026-09-12（本次修订：业务库四张表 → 六张表；架构图告警渠道由「Telegram/钉钉」"
-              "更正为已实现的「QQ 邮箱 SMTP」——这两处是设计文档与实现漂移，改的是文档。v1.0 · 2026-09-08 初稿）
+> 版本 v1.2 · 2026-09-12（v1.1：业务库四张表→六张表、告警渠道更正为 QQ 邮箱 SMTP；
+  v1.2：§12 开发命令去掉不存在的 mvnw、部署守护方式更正为 compose 重启策略——均为文档与实现漂移，改的是文档。
+  v1.0 · 2026-09-08 初稿）
 
 ---
 
@@ -290,8 +291,10 @@ NEW → SUBMITTED → PARTIALLY_FILLED → FILLED
 - 风控参数改动需要二次确认（防手滑）。
 
 **部署**：
-- 开发：Mac 本地，`./mvnw spring-boot:run -pl alpha-app`；
-- 实盘：海外 VPS（AWS 东京 / 阿里云新加坡，2C2G 足够），Docker 镜像 + docker-compose（app + mysql），systemd 守护，日志卷挂载；
+- 开发：Mac 本地，`mvn -pl alpha-app spring-boot:run`（仓库未配 Maven Wrapper，直接用本机 mvn）；
+- 实盘：海外 VPS（AWS 东京 / 阿里云新加坡，2C2G 足够），Docker 镜像 + docker-compose（app + mysql），
+  由 compose 的 `restart: unless-stopped` 守护（Docker daemon 随系统自启，无需单独 systemd 单元），
+  一键脚本见 `deploy/install.sh`；
 - CI：GitHub Actions —— 单测 + 回测冒烟（固定数据集，绩效指标阈值断言，防止改代码改坏策略行为）。
 
 ---
