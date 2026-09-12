@@ -26,8 +26,8 @@
 | T321 场景 2 模拟盘全链路 | Binance testnet API Key（`BINANCE_API_KEY/SECRET`） | P3 出口 |
 | T409 SC-03 七天连续运行 | testnet Key + 连续 7 天不中断 | P4 出口 |
 | T406 OKX demo 全链路联调 | OKX 凭据（`OKX_API_KEY/SECRET/PASSPHRASE`） | P4 |
-| T407 Docker 镜像构建验证 | 一台装了 Docker 的机器（本机没有） | P4 |
-| T408 MySQL 真实连接验证 | 可连的 MySQL 8 实例（或同一台 Docker 机器） | P4 |
+| T407 Docker 镜像构建验证 | **一台能拉到 Docker 运行时的机器**：本机实测 github.com / Docker Hub / desktop.docker.com 全部不可达（HTTP 000），colima 与 Docker Desktop 都装不起来 | P4 |
+| ~~T408 MySQL 真实连接验证~~ | ✅ 2026-09-12 完成：brew 装 MySQL 26.7.0，独立实例跑在 127.0.0.1:3307，`MySqlStoreTest` 3/3 通过 | P4 |
 | T506 实盘启动（SEC-02 逐项签字 + 首笔链路） | 真实资金 + 实盘 Key | P5 出口 |
 | T507 SC-06 两周观察 | 真实时间（两周） | P5 出口 |
 
@@ -69,8 +69,8 @@
 | T404 | 风控参数热更新（含二次确认），改动写审计记录 | RK-09、SEC-03 | 热更新不重启生效；越界参数被拒 | ☑ 完成：`RiskGate.reload` 原子换入管道 + `app/risk` 二次确认接口，非法参数整单拒绝 |
 | T405 | 幽灵仓位处置：补「配置选择自动平仓」分支（默认仍告警） | EX-05、plan P4-5 | 两种配置各自行为的单测 | ☑ 完成：Reconciler 幽灵仓位可选择自动平仓（默认仅告警），幂等 id 前缀 `ghost-close-` 防重复平仓 |
 | T406 | OkxSwapGateway：v5 行情 WS + 签名 REST（`OK-ACCESS-*` + HmacSHA256 base64）+ demo 头 | GW-06、plan P4-6 | 解析器与签名离线单测；demo 联调留用户 | ☑ 完成：`alpha.online.gateway=binance|okx` 接线（订阅循环对接口编程，加交易所未改装配逻辑）；签名/解析/客户端均有离线单测（9 例）+ 选择开关 2 例。**OKX demo 全链路联调留用户**（需 OKX 凭据） |
-| T407 | Docker：多阶段 Dockerfile + docker-compose（app + mysql）+ 部署脚本 | 部署、plan P4-7 | 镜像可构建；compose 与环境变量清单完整 | ◑ Dockerfile/.dockerignore/docker-compose 就绪；本机无 Docker，镜像构建需用户在 VPS 或本地验证 |
-| T408 | MySQL 8 数据源切换（本地仍 SQLite） | OP-04、plan P4-8 | 双 URL 配置解析单测；真实 MySQL 连接留用户 | ☑ 完成：`StoreProperties.dialect()` + `StoreDataSource` 工厂，SQLite/MySQL 按 URL 分发（5 例单测） |
+| T407 | Docker：多阶段 Dockerfile + docker-compose（app + mysql）+ 部署脚本 | 部署、plan P4-7 | 镜像可构建；compose 与环境变量清单完整 | ⊘ 阻塞：**本机网络无法获得 Docker 运行时**（非权限问题）——colima 两次启动失败于 GitHub release 下载，`curl` 实测 github.com / registry-1.docker.io / desktop.docker.com 全部 HTTP 000；已做的静态核对：Dockerfile 的 COPY 源全部存在、jar 路径与构建产物一致、compose 环境变量已补进 `.env.example`。镜像构建与 compose 起服务需在有 Docker 的机器上跑 |
+| T408 | MySQL 8 数据源切换（本地仍 SQLite） | OP-04、plan P4-8 | 双 URL 配置解析单测；真实 MySQL 连接留用户 | ☑ 完成：①`StoreProperties.dialect()` + `StoreDataSource` 工厂（按 URL 分发，未知方言启动即失败）；②**对真实 MySQL 验证通过**（本机 MySQL 26.7.0，独立实例 3307）：六张表建得出、orders/fills 与四张历史表写回读全通；③首跑抓到真 bug——`CREATE INDEX IF NOT EXISTS` 是 SQLite 专有语法，MySQL 语法错误，「方言中立」此前只在 SQLite 上验证过，已改方言分支；④`MySqlStoreTest` 环境变量门控可重复执行（CI 跳过） |
 | T409 | **SC-03 出口**：testnet 连续 7 天零差异、告警邮件按预期到达 | SC-03 | ⚠️ 需用户运行 | ⊘ 阻塞 |
 
 > **T321（P3 遗留）**：场景 2 模拟盘全链路联调，需 testnet API Key，同样标记为用户验收项。
@@ -107,3 +107,4 @@
 | 2026-09-12 10:40 | **P5 可编码部分完成（T501-T504）** | 通过：`mvn clean verify` 全绿、**736 用例 0 失败**。T501 实盘权益上限（live-only，作为 leading rule 先于其他规则；加仓拦、减仓放行）；T502 启动前置校验六项，其中「live 指向 testnet」与「paper 指向实盘」两个静默配置错误是本任务真正的价值；T503 告警演练（接口 + live 启动自动，失败给原因不抛异常）；T504 每日净值日报（半开 UTC 窗口、日内回撤、空日发「NO SAMPLES」而非 0 收益）。**T505 未做**：回测报告不导出信号（只有成交/挂单），比对只能做一半，不做半成品——已在任务里写明缺的桥是什么。**过程中修了自己一个错**：新增 `AlertDrill` 忘了声明 bean，容器启动即失败，被 paper 容器测试抓住（这正是那类测试存在的意义）。 |
 | 2026-09-12 11:15 | 落盘与漂移修正（无代码逻辑变更） | ①`tasks.md` 新增**「阻塞与待办总表」**作为全项目唯一未完成清单（8 项阻塞 + 1 项待办 + 3 条已修复漂移），并写进项目 MEMORY.md；②修正三处「说的和做的不一致」：`application-live.yml` 补 `alpha.alert.drill-on-startup: true`（此前代码注释声称 live 默认开启但配置缺项）、`Dockerfile` 注释不再引用不存在的 `StopWiring` 类、`docs/DESIGN.md` 升 v1.1（四张表→六张表、告警渠道 Telegram/钉钉→QQ SMTP）；③把「读契约→小步实现→模块测试→全量验证→提交→落盘」这套闭环存成可复用技能 `java-sdd-task-loop`。`mvn clean verify` 仍全绿 |
 | 2026-09-12 11:35 | **T505 SC-05 同构一致性抽查完成**（P5 最后一件可编码任务） | 通过：`mvn clean verify` 全绿、**744 用例 0 失败**。①先补桥：`BacktestReport` 增加 `signals` 字段（回测内部早在用 `SignalRecorder` 记录，只是没交给任何人——这正是「SC-05 没有可比较的数据」的真实原因，不是技术上导不出）；②`SignalConsistencyReport` 以多重集比对，身份 = (策略, 标的, 方向, bar 时间)，因为事件 id 是进程内分配的、strength/reason 是策略可改写的自由文本；③装配：`alpha.backtest.reference-store` 指向另一模式的业务库，回测结束时打印一致/缺失/多出，不一致只告警不中断（观察期它是证据，会中断的检查没人收集）。**顺带修掉一个真实的引擎竞态**：`awaitQuiescence` 的 `isIdle()` 没把「其他线程交进来的 `runOnLoop` 任务」算作有活干，于是屏障可能在任务执行前放行——表现是 `RiskReloadServiceTest` 全量跑时偶发失败（8 轮复现 2 次，任务事件从未入队）。修法：①`isIdle()` 计入待执行任务；②根因其实是 `RiskReloadService` **在换入生效前就回 HTTP 200**——改为等待事件循环确认已换入（5s 上限），「已受理」与「已生效」不再是同一句话。app 模块连跑三轮全绿。 |
+| 2026-09-12 11:45 | **T408 完成（真实 MySQL 验证）+ T407 判定为环境阻塞** | 通过：`mvn clean verify` 全绿（**747 用例**）。**T408**：brew 安装 MySQL 26.7.0 并另起独立实例（独立 datadir + 3307，不动机器上原有那个需要密码的实例），新增环境变量门控的 `MySqlStoreTest`（CI 跳过、本地可重复跑），六张表 + 四张历史表读写全部通过。**首跑即抓到真 bug**：`CREATE INDEX IF NOT EXISTS` 是 SQLite 专有语法，MySQL 直接语法错误——此前「方言中立」的 DDL 只在 SQLite 上验证过；已改为方言分支（MySQL 查 `information_schema.statistics`，SQLite 查 `sqlite_master`），未知数据库产物响亮失败。另补齐 `.env.example` 缺失的 `ALPHA_DB_ROOT_PASSWORD` 与四个运行开关。**T407**：按用户授权尝试安装 Docker —— brew 装好了 colima/docker/compose/mysql-client，但**运行时起不来**：colima 两次卡在 GitHub release 下载，`curl` 实测 github.com / registry-1.docker.io / desktop.docker.com 全部不可达（HTTP 000），Docker Desktop 走同一网络同样无解。结论：T407 是**网络环境阻塞**，与权限无关；已做能做的静态核对（COPY 源存在、jar 路径匹配、compose 变量齐备），镜像构建需换一台机器。 |
