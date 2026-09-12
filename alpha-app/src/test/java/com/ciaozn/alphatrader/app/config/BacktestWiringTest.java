@@ -340,7 +340,7 @@ class BacktestWiringTest {
         private AlphaProperties.Backtest backtest() {
             return new AlphaProperties.Backtest(
                     new AlphaProperties.Backtest.Data(source, klines(), jdbcUrl),
-                    from, to, series, cost, rules, reports(), journal, null);
+                    from, to, series, cost, rules, reports(), journal, null, null);
         }
 
         /**

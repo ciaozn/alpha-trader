@@ -3,6 +3,7 @@ package com.ciaozn.alphatrader.backtest.report;
 import com.ciaozn.alphatrader.backtest.feed.BacktestDataFeeder;
 import com.ciaozn.alphatrader.backtest.match.SimulatedExecutor;
 import com.ciaozn.alphatrader.common.event.OrderRequestEvent;
+import com.ciaozn.alphatrader.common.event.SignalEvent;
 import com.ciaozn.alphatrader.common.portfolio.Position;
 
 import java.math.BigDecimal;
@@ -33,6 +34,7 @@ public record BacktestReport(
         List<SimulatedExecutor.Rejection> rejections,
         List<OrderRequestEvent> pendingOrders,
         List<Position> openPositions,
+        List<SignalEvent> signals,
         SimulatedExecutor.CostModel costModel) {
 
     public BacktestReport {
@@ -43,6 +45,7 @@ public record BacktestReport(
         rejections = List.copyOf(rejections);
         pendingOrders = List.copyOf(pendingOrders);
         openPositions = List.copyOf(openPositions);
+        signals = List.copyOf(signals);
     }
 
     /** Total funding charged over the run; the sum of the settlements, not a book reading. */

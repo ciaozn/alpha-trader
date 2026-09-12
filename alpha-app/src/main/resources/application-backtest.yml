@@ -44,3 +44,9 @@ alpha:
     # writes, not how long it takes: measured on the 26281-bar SC-01 run it added 0.3s (1.4s ->
     # 1.8s wall) and an 8.3MB file per run. Turn it on to replay one run event by event.
     journal: false
+
+# alpha:
+#   backtest:
+#     # SC-05 (T505): set this to the business database of a live/paper run over the same window and
+#     # the replay compares the two signal sequences, logging the verdict. Left unset by default.
+#     reference-store: jdbc:sqlite:data/trading.db

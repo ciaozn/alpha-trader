@@ -43,6 +43,9 @@ public final class RiskReloadService {
     /** Rule id carried by the audit alert; it names the reload rather than any risk level. */
     public static final String RULE_RELOADED = "RK-09-risk-reloaded";
 
+    /** How long the caller waits for the loop to apply the swap before reporting it as not applied. */
+    private static final java.time.Duration RELOAD_APPLY_TIMEOUT = java.time.Duration.ofSeconds(5);
+
     private static final Logger log = LoggerFactory.getLogger(RiskReloadService.class);
 
     private final RiskGate gate;
@@ -94,17 +97,39 @@ public final class RiskReloadService {
         List<String> orderRules = ids(replacement.orderRules());
         warnAboutObserverRules(replacement);
 
+        // Waits for the loop to apply the swap before answering (T404). "Accepted" and "in force" are
+        // different claims, and an operator who reloads and immediately checks behaviour would have
+        // been reading a state that was still on its way. The wait is bounded: a stuck loop must not
+        // hang an HTTP thread, and the outcome is then reported as not applied rather than assumed.
+        java.util.concurrent.CountDownLatch applied = new java.util.concurrent.CountDownLatch(1);
         engine.runOnLoop(() -> {
-            gate.reload(replacement);
-            engine.publish(RiskAlertEvent.of(RULE_RELOADED, RiskAlertEvent.Severity.INFO,
-                    "risk pipeline reloaded by an operator: signal rules " + signalRules
-                            + ", order rules " + orderRules
-                            + "; only signals arriving after this instant see the new rules",
-                    clock.nowMillis()));
+            try {
+                gate.reload(replacement);
+                engine.publish(RiskAlertEvent.of(RULE_RELOADED, RiskAlertEvent.Severity.INFO,
+                        "risk pipeline reloaded by an operator: signal rules " + signalRules
+                                + ", order rules " + orderRules
+                                + "; only signals arriving after this instant see the new rules",
+                        clock.nowMillis()));
+            } finally {
+                applied.countDown();
+            }
         });
-        log.info("Risk reload accepted by an operator: signal rules {}, order rules {}", signalRules, orderRules);
+        boolean inForce;
+        try {
+            inForce = applied.await(RELOAD_APPLY_TIMEOUT.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting for the risk reload to apply", e);
+        }
+        if (!inForce) {
+            return new RiskReloadResult(false,
+                    "the engine did not apply the reload within " + RELOAD_APPLY_TIMEOUT.toSeconds()
+                            + "s; the previous rules are still in force",
+                    signalRules, orderRules);
+        }
+        log.info("Risk reload applied by an operator: signal rules {}, order rules {}", signalRules, orderRules);
         return new RiskReloadResult(true,
-                "accepted; the new pipeline applies on the engine thread before the next signal",
+                "applied on the engine thread; the new pipeline decides every signal from now on",
                 signalRules, orderRules);
     }
 

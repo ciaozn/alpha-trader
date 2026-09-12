@@ -1,12 +1,16 @@
 package com.ciaozn.alphatrader.app.config;
 
+import com.ciaozn.alphatrader.app.data.JdbcRecordStore;
+import com.ciaozn.alphatrader.app.data.StoreDataSource;
 import com.ciaozn.alphatrader.backtest.BacktestRunner;
 import com.ciaozn.alphatrader.backtest.feed.BacktestDataFeeder.Series;
 import com.ciaozn.alphatrader.backtest.match.SimulatedExecutor;
 import com.ciaozn.alphatrader.backtest.report.BacktestReport;
 import com.ciaozn.alphatrader.backtest.report.ConsoleSummary;
+import com.ciaozn.alphatrader.backtest.report.SignalConsistencyReport;
 import com.ciaozn.alphatrader.backtest.report.HtmlReportRenderer;
 import com.ciaozn.alphatrader.common.data.KlineRepository;
+import com.ciaozn.alphatrader.common.event.SignalEvent;
 import com.ciaozn.alphatrader.common.model.FixedTradingRulesProvider;
 import com.ciaozn.alphatrader.common.model.Symbol;
 import com.ciaozn.alphatrader.common.model.TradingRules;
@@ -32,6 +36,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -98,6 +103,16 @@ public class BacktestWiring implements ApplicationRunner {
         Path directory = Files.createDirectories(backtest.reportDir());
         BacktestReport report = new BacktestRunner(config(backtest, directory)).run();
 
+        compareWithReference(report).ifPresent(result -> {
+            if (result.consistent()) {
+                log.info("SC-05 signal consistency: {}", result.render());
+            } else {
+                // Loud, and deliberately not fatal: during the P5 observation this is evidence, and
+                // evidence that stops a run is evidence nobody collects.
+                log.warn("SC-05 signal consistency FAILED\n{}", result.render());
+            }
+        });
+
         Path html = directory.resolve(REPORT_FILE);
         Files.writeString(html, HtmlReportRenderer.render(report), StandardCharsets.UTF_8);
         // The console summary is the one place the run's wall-clock duration is printed: SC-01 is a
@@ -106,6 +121,38 @@ public class BacktestWiring implements ApplicationRunner {
         log.info("\n{}", ConsoleSummary.render(report));
         log.info("Backtest report written to {}", html.toAbsolutePath());
         return report;
+    }
+
+    /**
+     * SC-05 (T505): compares the signals this replay produced with the ones recorded by a live or
+     * simulated run over the same window.
+     *
+     * <p>Configured by {@code alpha.backtest.reference-store} - the JDBC URL of the business database
+     * the other mode wrote to. Absent means the comparison does not run, because it is a diagnostic:
+     * a replay that refuses to start without a second database would be a replay nobody can run.
+     *
+     * <p>The replay is the <em>reference</em> and the recorded side is the <em>actual</em>: the question
+     * SC-05 asks is "did the live path decide what the backtest says it should have", and asking it the
+     * other way round would name every live signal a surprise.
+     */
+    Optional<SignalConsistencyReport> compareWithReference(BacktestReport report) {
+        String url = properties.backtest().referenceStore();
+        if (url == null || url.isBlank()) {
+            return Optional.empty();
+        }
+        List<SignalEvent> recorded = readRecordedSignals(url,
+                millis(properties.backtest().from(), "alpha.backtest.from"),
+                millis(properties.backtest().to(), "alpha.backtest.to"));
+        return Optional.of(SignalConsistencyReport.compare(report.signals(), recorded));
+    }
+
+    /** Reads the other mode's signals; package-private so a test can check the plumbing, not just the maths. */
+    static List<SignalEvent> readRecordedSignals(String jdbcUrl, long from, long to) {
+        // No try-with-resources: the store is not a connection but a thin wrapper over the DataSource,
+        // and these reads are one-shot at the end of a run.
+        JdbcRecordStore records = new JdbcRecordStore(
+                StoreDataSource.create(new StoreProperties(jdbcUrl, null, null)));
+        return records.signals(from, to);
     }
 
     private BacktestRunner.Config config(AlphaProperties.Backtest backtest, Path directory) {

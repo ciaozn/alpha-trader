@@ -231,7 +231,7 @@ class HtmlReportRendererTest {
                         "min & \"max\" < 0", T0));
         BacktestReport report = new BacktestReport(replay(false), series(), metrics(),
                 curve("10000", "10100"), List.of(), List.of(), List.of(), rejections, List.of(),
-                List.of(), SimulatedExecutor.CostModel.DEFAULT);
+                List.of(), List.of(), SimulatedExecutor.CostModel.DEFAULT);
 
         String html = HtmlReportRenderer.render(report);
 
@@ -348,6 +348,7 @@ class HtmlReportRendererTest {
                 unresolved ? rejections() : List.of(),
                 unresolved ? pending() : List.of(),
                 unresolved ? positions() : List.of(),
+                List.of(), // signals: this test is about the renderer, not about the run's signals
                 SimulatedExecutor.CostModel.DEFAULT);
     }
 
@@ -356,7 +357,7 @@ class HtmlReportRendererTest {
         EquityCurve curve = curve("10000", "10100", "10200");
         return new BacktestReport(replay(false), series(),
                 PerformanceAnalyzer.analyze(curve, trades, SAMPLE), curve, trades,
-                fills(), funding(), List.of(), List.of(), List.of(),
+                fills(), funding(), List.of(), List.of(), List.of(), List.of(),
                 SimulatedExecutor.CostModel.DEFAULT);
     }
 

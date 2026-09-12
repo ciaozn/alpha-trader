@@ -74,7 +74,7 @@ class DownloadWiringTest {
         Path database = directory.resolve("klines.db");
         AlphaProperties.Backtest store = new AlphaProperties.Backtest(
                 new AlphaProperties.Backtest.Data("db", null, "jdbc:sqlite:" + database),
-                null, null, List.of(), null, List.of(), Path.of("reports"), false, null);
+                null, null, List.of(), null, List.of(), Path.of("reports"), false, null, null);
         try (StubKlineExchange exchange = new StubKlineExchange(StubKlineExchange.bars(BARS, T0, HOUR))) {
             new DownloadWiring(properties(download(exchange), store, List.of(BTC.unified()), "1h")).download();
         }
@@ -210,7 +210,7 @@ class DownloadWiringTest {
     void anUnknownStoreSourceIsRefusedNamingTheProperty() {
         AlphaProperties.Backtest store = new AlphaProperties.Backtest(
                 new AlphaProperties.Backtest.Data("parquet", directory, null),
-                null, null, List.of(), null, List.of(), Path.of("reports"), false, null);
+                null, null, List.of(), null, List.of(), Path.of("reports"), false, null, null);
         AlphaProperties.Download download = new AlphaProperties.Download(
                 Instant.ofEpochMilli(T0), Instant.ofEpochMilli(T0 + HOUR), List.of(), "http://127.0.0.1:1");
 
@@ -334,7 +334,7 @@ class DownloadWiringTest {
     private static AlphaProperties.Backtest csvStore(Path klines) {
         return new AlphaProperties.Backtest(
                 new AlphaProperties.Backtest.Data("csv", klines, null),
-                null, null, List.of(), null, List.of(), Path.of("reports"), false, null);
+                null, null, List.of(), null, List.of(), Path.of("reports"), false, null, null);
     }
 
     private static SQLiteDataSource dataSource(String url) {

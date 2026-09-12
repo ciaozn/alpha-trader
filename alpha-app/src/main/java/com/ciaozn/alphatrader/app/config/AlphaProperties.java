@@ -390,11 +390,12 @@ public record AlphaProperties(
             List<RuleEntry> rules,
             Path reportDir,
             boolean journal,
-            Duration quiescenceTimeout) {
+            Duration quiescenceTimeout,
+            String referenceStore) {
 
         /** What an absent block means: no range, so the wiring refuses rather than inventing one. */
         public static final Backtest DEFAULTS =
-                new Backtest(null, null, null, null, null, null, null, false, null);
+                new Backtest(null, null, null, null, null, null, null, false, null, null);
 
         /**
          * {@code csv} reads one file per symbol+interval under {@code csvDir}; {@code db} reads the

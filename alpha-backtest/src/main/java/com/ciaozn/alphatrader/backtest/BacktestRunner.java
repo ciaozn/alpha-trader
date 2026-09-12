@@ -222,7 +222,12 @@ public final class BacktestRunner {
                 tradeTracker.trades(), samplingPeriod(config.series()));
         return new BacktestReport(replay, config.series(), metrics, equityRecorder.curve(),
                 tradeTracker.trades(), executor.fills(), executor.funding(), executor.rejections(),
-                executor.pendingOrders(), portfolio.openPositions(), executor.costModel());
+                executor.pendingOrders(), portfolio.openPositions(),
+                // The signals the replay actually produced (T505). They were already being recorded -
+                // SignalRecorder has been on this bus since P2 - and simply not handed to anyone, which
+                // is why SC-05's comparison had nothing to compare against.
+                records.signals(config.fromOpenTime(), config.toOpenTime()),
+                executor.costModel());
     }
 
     /**

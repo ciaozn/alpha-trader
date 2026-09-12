@@ -238,7 +238,7 @@ class BacktestSmokeTest {
                 Instant.ofEpochMilli(FROM), Instant.ofEpochMilli(TO), List.of(), null,
                 List.of(new AlphaProperties.Backtest.RuleEntry(BTC.unified(), RULES.tickSize(),
                         RULES.stepSize(), RULES.minNotional())),
-                reportDir, false, null);
+                reportDir, false, null, null);
         return new AlphaProperties("backtest", List.of(BTC.unified()), "1h", true,
                 new AlphaProperties.Trading(false), Path.of("logs"), EQUITY, null,
                 List.of(new AlphaProperties.StrategyEntry("ma-cross-btc", "ma-cross", true, null, null, params)),

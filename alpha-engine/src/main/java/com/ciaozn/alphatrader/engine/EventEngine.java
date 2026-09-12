@@ -197,9 +197,16 @@ public final class EventEngine implements AutoCloseable {
     /**
      * Caller must hold {@link #quiescenceLock}. No cascade check: {@link #dispatching}
      * spans the whole round, and a round is defined to include its cascade closure.
+     *
+     * <p><b>Work handed in from other threads counts as work.</b> A pending {@link #runOnLoop} task is
+     * not idle: it has not run yet, and whatever it publishes - a correction, an audit record, a
+     * reload's alert - is still owed to the log. Leaving it out of this condition let a replay barrier
+     * report "quiescent" while such a task was still queued, so a caller that then read what the task
+     * was supposed to produce found nothing. The window is narrow and load-dependent, which is why it
+     * surfaced as an intermittent failure in a full test run rather than as a reproducible bug.
      */
     private boolean isIdle() {
-        return !dispatching && externalQueue.isEmpty() && millisUntilNextTimer() > 0;
+        return !dispatching && externalQueue.isEmpty() && loopTasks.isEmpty() && millisUntilNextTimer() > 0;
     }
 
     /** Work handed in by other threads (see {@link #runOnLoop}) runs on the loop, before the next event. */
@@ -211,6 +218,11 @@ public final class EventEngine implements AutoCloseable {
             } catch (Exception e) {
                 log.error("Loop task failed", e);
             }
+        }
+        // Waking the barrier after the tasks ran is an optimisation; the correctness comes from
+        // isIdle() counting pending tasks, which is what stops a waiter returning too early.
+        synchronized (quiescenceLock) {
+            quiescenceLock.notifyAll();
         }
     }
 
