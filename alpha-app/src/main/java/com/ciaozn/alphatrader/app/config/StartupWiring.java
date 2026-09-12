@@ -71,6 +71,21 @@ public class StartupWiring implements ApplicationRunner {
         this.online = online;
     }
 
+    /**
+     * Credentials are read per exchange here rather than in the gateway: an exchange adapter should
+     * receive what it needs and not know where it came from, and OKX's passphrase is a third secret
+     * with no Binance counterpart, so the difference belongs where the choice is made.
+     */
+    private static GatewayConfig credentials(OnlineProperties.GatewayType type, boolean testnet) {
+        return switch (type) {
+            case BINANCE -> new GatewayConfig(testnet,
+                    System.getenv("BINANCE_API_KEY"), System.getenv("BINANCE_API_SECRET"));
+            case OKX -> GatewayConfig.withPassphrase(testnet,
+                    System.getenv("OKX_API_KEY"), System.getenv("OKX_API_SECRET"),
+                    System.getenv("OKX_PASSPHRASE"));
+        };
+    }
+
     @Override
     public void run(ApplicationArguments args) {
         handlers.handlers().forEach(engine::registerHandler);
@@ -80,12 +95,11 @@ public class StartupWiring implements ApplicationRunner {
         orderSender.start();
 
         GatewayConfig config = properties.trading().enabled()
-                ? new GatewayConfig(properties.binanceTestnet(),
-                        System.getenv("BINANCE_API_KEY"), System.getenv("BINANCE_API_SECRET"))
+                ? credentials(online.gateway(), properties.binanceTestnet())
                 : GatewayConfig.marketDataOnly(properties.binanceTestnet());
         gateway.connect(config);
-        log.info("Gateway connect initiated (testnet={}, trading={}) - supervisor owns reconnects",
-                properties.binanceTestnet(), properties.trading().enabled());
+        log.info("Gateway connect initiated (exchange={}, testnet={}, trading={}) - supervisor owns reconnects",
+                online.gateway(), properties.binanceTestnet(), properties.trading().enabled());
 
         if (properties.trading().enabled()) {
             reconciliation.start();

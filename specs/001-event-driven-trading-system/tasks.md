@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |---|---|
-| 状态 | **P0-P3 已完成**；**P4 完成 T401-T408**（T406 的 app 级网关选择待接线）；T409 与 T321 待用户验收 |
+| 状态 | **P0-P3 已完成**；**P4 编码完成（T401-T408）**，但 P4 未收尾：出口验收 T409（SC-03 七天连续运行） 与 T406 的 OKX demo 联调、T321 场景 2 联调都需用户 testnet 凭据 |
 | 创建日期 | 2026-09-09 |
 | 最近更新 | 2026-09-12（瘦身：已完成阶段移入归档） |
 | 上游文档 | [plan.md](./plan.md)（Approved）· [spec.md](./spec.md)（Approved） |
@@ -35,7 +35,7 @@
 | T403 | 崩溃恢复：启动先全量同步交易所 → 回放事件日志校验 → 恢复策略；不一致只告警不静默改账 | EN-05、边界 7 | kill -9 后重启状态正确；日志回放与库内状态比对单测 | ☑ 完成：`JournalReplay`（日志回放期望状态）+ `StartupRecovery`（启动同步→回放校验→差异只告警） |
 | T404 | 风控参数热更新（含二次确认），改动写审计记录 | RK-09、SEC-03 | 热更新不重启生效；越界参数被拒 | ☑ 完成：`RiskGate.reload` 原子换入管道 + `app/risk` 二次确认接口，非法参数整单拒绝 |
 | T405 | 幽灵仓位处置：补「配置选择自动平仓」分支（默认仍告警） | EX-05、plan P4-5 | 两种配置各自行为的单测 | ☑ 完成：Reconciler 幽灵仓位可选择自动平仓（默认仅告警），幂等 id 前缀 `ghost-close-` 防重复平仓 |
-| T406 | OkxSwapGateway：v5 行情 WS + 签名 REST（`OK-ACCESS-*` + HmacSHA256 base64）+ demo 头 | GW-06、plan P4-6 | 解析器与签名离线单测；demo 联调留用户 | ◑ 网关/签名/解析已实现并测试（9 例）；**app 级网关选择（`alpha.online.gateway`）尚未接线**，OKX demo 联调留用户 |
+| T406 | OkxSwapGateway：v5 行情 WS + 签名 REST（`OK-ACCESS-*` + HmacSHA256 base64）+ demo 头 | GW-06、plan P4-6 | 解析器与签名离线单测；demo 联调留用户 | ☑ 完成：`alpha.online.gateway=binance|okx` 接线（订阅循环对接口编程，加交易所未改装配逻辑）；签名/解析/客户端均有离线单测（9 例）+ 选择开关 2 例。**OKX demo 全链路联调留用户**（需 OKX 凭据） |
 | T407 | Docker：多阶段 Dockerfile + docker-compose（app + mysql）+ 部署脚本 | 部署、plan P4-7 | 镜像可构建；compose 与环境变量清单完整 | ◑ Dockerfile/.dockerignore/docker-compose 就绪；本机无 Docker，镜像构建需用户在 VPS 或本地验证 |
 | T408 | MySQL 8 数据源切换（本地仍 SQLite） | OP-04、plan P4-8 | 双 URL 配置解析单测；真实 MySQL 连接留用户 | ☑ 完成：`StoreProperties.dialect()` + `StoreDataSource` 工厂，SQLite/MySQL 按 URL 分发（5 例单测） |
 | T409 | **SC-03 出口**：testnet 连续 7 天零差异、告警邮件按预期到达 | SC-03 | ⚠️ 需用户运行 | ⊘ 阻塞 |
@@ -53,3 +53,4 @@
 
 > 更早的执行日志见 [归档](./tasks-archive-p0-p3.md)。
 | 2026-09-12 10:30 | **P4 收尾（T401-T408）** | 全部走完，`mvn clean verify` 全绿、**710 用例 0 失败**。T401 邮件告警、T402 状态接口（夜里已完成并验证）、T403 崩溃恢复（`JournalReplay`+`StartupRecovery`）、T404 风控热更新（`RiskGate.reload`+二次确认接口）、T405 幽灵仓位可选自动平仓、T406 OKX 网关（签名/REST/行情/四个解析器）、T407 Docker 部署文件、T408 双数据库方言。**值得记住的一次错误**：OKX 签名我按记忆写成「不含 query string」，还配了测试把错误信念钉住——查官方文档后确认预映像必须包含 query（官方示例 `/api/v5/account/balance?ccy=BTC`），已一并修正实现、测试与 javadoc。**遗留**：T406 只差 app 级网关选择接线；T407 镜像未实际构建（本机无 Docker）；T409/T321 需 testnet 凭据。 |
+| 2026-09-12 10:45 | T406 补齐 app 级网关接线（`alpha.online.gateway=binance\|okx`） | 通过：`GatewayWiringConfig` 的订阅循环改为面向 `ExchangeGateway` 接口，新增 `GatewayWiringTest` 2 例断言属性真的选中实现（此前 OKX 网关「有测试但无法启用」——与 T319 之前在线链路的情形同型）。app 模块 184 用例全绿 |

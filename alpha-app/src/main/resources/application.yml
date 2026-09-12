@@ -7,6 +7,12 @@ spring:
 
 alpha:
   mode: ${ALPHA_MODE:backtest}
+  online:
+    # Which exchange the online modes attach to (T406). binance | okx
+    # OKX needs OKX_API_KEY / OKX_API_SECRET / OKX_PASSPHRASE; paper mode uses OKX demo trading.
+    gateway: ${ALPHA_GATEWAY:binance}
+    reconcile-period: 60s
+    snapshot-period: 60s
   symbols:
     - BTCUSDT.PERP
   interval: 1h
