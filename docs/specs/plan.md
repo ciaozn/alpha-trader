@@ -242,11 +242,12 @@ Docker、双方言）→ **P5 可编码部分完成**（T501-T504：实盘权益
 |---|---|---|
 | OKX 私有流（成交回报目前最多延迟一个对账周期 60s） | `OkxSwapGateway` 类注释里写明的刻意取舍 | 完善 |
 | Spring Actuator 接线（DESIGN 提过 Actuator + 自建 `/api/status`，只做了后者） | DESIGN §11 | 完善 |
-| app 容器 healthcheck（compose 只检查 MySQL） | `docker-compose.yml` | 完善 |
+| ~~app 容器 healthcheck~~ | ✅ 2026-09-13 已随 T509 落地（bash `/dev/tcp` 探测 8080） | 完善 |
 | 策略库扩展（当前仅 MA 交叉 + RSI）、参数寻优 / walk-forward | 原设计未展开 | 新功能 |
 | 多标的 / 多策略资金分配 | 原设计未展开 | 新功能 |
 | 备用告警渠道（Server 酱 / 企业微信 webhook） | DESIGN §11 备注 | 完善 |
 | 性能升级口：Disruptor 替换自研事件循环 | DESIGN §5 预留 | 新功能 |
+| ~~发布流水线（CI/CD 自动部署到 VPS）~~ | ✅ 2026-09-13 转正为 **T509** 并交付（GitHub Actions → ghcr.io → SSH 拉取切换，含健康检查与自动回滚） | 完善 |
 | 运维：数据备份、密钥轮换、月度审计报表 | 原设计未展开 | 运维 |
 
 > 要不要开 P6、开哪些，等 P5 的实盘观察（SC-06）有结论再定更合理：两周的真实运行会给出

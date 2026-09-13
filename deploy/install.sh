@@ -55,12 +55,20 @@ fi
 echo "[4/4] 启动"
 docker compose up -d
 docker compose ps
+# 交给调用者所有：后续的发布流水线要用这个账号在这里跑 deploy/update.sh，不该依赖 root。
+OWNER="${SUDO_USER:-root}"
+chown -R "$OWNER" "${INSTALL_DIR}"
+echo "  部署目录已归属：$OWNER"
+
 echo
 echo "完成。常用操作（都在 ${INSTALL_DIR} 下执行）："
 echo "  docker compose logs -f app      # 跟踪应用日志"
 echo "  docker compose restart app      # 重启应用"
 echo "  docker compose down             # 停止（数据卷保留）"
 echo "  curl -s localhost:8080/api/status | head   # 状态接口（compose 里仅绑 127.0.0.1）"
+echo
+echo "想让发布流水线自动更新（不用每次手动部署）？把部署账号加进 docker 组，"
+echo "然后按 deploy/README.md 配好 GitHub Secrets：sudo usermod -aG docker ${SUDO_USER:-root}"
 echo
 echo "提醒：.env 里 ALPHA_TRADING_ENABLED 默认 false、ALPHA_PROFILE 默认 paper。"
 echo "切 live 前先过一遍启动日志里的 Preflight 清单（SEC-02 的手工项也要逐条确认）。"

@@ -77,7 +77,13 @@ alpha-common      事件模型、领域模型、Clock 抽象、Portfolio 账本
 docker compose up -d      # app + MySQL 8.4，含健康检查与开机重启
 ```
 
-VPS 一键脚本见 [`deploy/install.sh`](deploy/install.sh)（安装 Docker、生成 `.env`、起服务）。
+- **首次上机**：[`deploy/install.sh`](deploy/install.sh)（装 Docker、克隆、生成 `.env`、起服务）
+- **之后每次更新**：打 tag 即自动发布——流水线验证 → 构建 amd64+arm64 镜像 → 推 ghcr.io →
+  SSH 到 VPS 拉取切换，健康检查失败自动回滚。见 [`.github/workflows/release.yml`](.github/workflows/release.yml)
+- **配置与回滚细节**：[`deploy/README.md`](deploy/README.md)
+
+> 镜像在 CI（x86_64）上构建并显式声明 `linux/amd64,linux/arm64`，因此规避了「本机 arm64 构建的镜像
+> 在 x86 的 VPS 上跑不了」这个问题。
 
 ## 文档地图
 

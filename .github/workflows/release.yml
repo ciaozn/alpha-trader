@@ -1,0 +1,131 @@
+name: Release
+
+# 发布流水线：验证 → 构建多架构镜像 → 推送到 ghcr.io → （可选）部署到 VPS。
+#
+# 为什么在 CI 里构建镜像，而不是在 VPS 上构建：
+#   1. 构建机的架构决定镜像架构。本机是 arm64，构建出的镜像在 x86_64 的 VPS 上跑不了；
+#      CI 用的是 x86_64，并且下面显式声明 platforms: linux/amd64,linux/arm64，两边都能跑。
+#   2. VPS 只负责“拉取并切换”，不需要 JDK、不需要 Maven、不需要拉几百 MB 的构建基础镜像。
+#   3. 镜像与提交哈希一一对应，回滚就是把 ALPHA_IMAGE 指回上一个标签。
+#
+# 触发方式：
+#   * 推送 v* 标签  → 构建 + 部署（正式发布）
+#   * 手动触发      → 构建；勾选 deploy_to_vps 才部署（试跑用）
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      deploy_to_vps:
+        description: '构建完成后部署到 VPS'
+        type: boolean
+        default: false
+
+# packages: write 是推送到 ghcr.io 必需的；contents: read 是最小权限。
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  # 第一关：测试不通过就不构建镜像。镜像一旦推上去就是“可部署的”，不该建立在没跑测试的代码上。
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Build and test
+        run: mvn -B clean verify
+
+  # 第二关：构建并推送镜像。标签规则见 docker/metadata-action 的 tags。
+  image:
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      # 部署要一个确定的引用，所以这里把“本次构建叫什么”显式算出来，而不是让下游猜标签列表。
+      ref: ${{ steps.tag.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tag
+        name: 决定本次镜像标签
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "ref=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 登录 ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=tag
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+
+      - name: 构建并推送（amd64 + arm64）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # 同时构建两个架构：x86_64 的 VPS 与 arm64 的开发机各取所需，本地调试不用重新构建。
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # 第三关：部署。只在正式发布或手动勾选时执行。
+  # environment: production 会在 GitHub 上产生一个可配置的人工审批门（按需开启）。
+  deploy:
+    needs: image
+    if: github.ref_type == 'tag' || inputs.deploy_to_vps
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 准备 SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ vars.VPS_PORT || '22' }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          # 固定主机指纹，避免首次连接时的交互式确认把流水线挂住。
+          ssh-keyscan -p "$VPS_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: 在 VPS 上更新镜像
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT || '22' }}
+          DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH || '/opt/alpha-trader' }}
+          IMAGE_REF: ${{ env.IMAGE }}:${{ needs.image.outputs.ref }}
+        run: |
+          scp -P "$VPS_PORT" -i ~/.ssh/id_deploy \
+            deploy/update.sh "$VPS_USER@$VPS_HOST:/tmp/alpha-update.sh"
+          # 不用 sudo：部署账号加进 docker 组即可，避免为流水线开一个免密 sudo。
+          ssh -p "$VPS_PORT" -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+            "bash /tmp/alpha-update.sh '$IMAGE_REF' '$DEPLOY_PATH'"

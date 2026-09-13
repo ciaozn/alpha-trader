@@ -33,6 +33,10 @@ services:
       start_period: 30s
 
   app:
+    # Local development builds this (docker compose up --build); the release pipeline sets
+    # ALPHA_IMAGE to a pushed image tag and the VPS pulls instead of building. One variable, because
+    # "which image is running" is exactly the thing a deploy must be able to name.
+    image: ${ALPHA_IMAGE:-alpha-trader:local}
     build: .
     restart: unless-stopped
     depends_on:
@@ -63,6 +67,17 @@ services:
       - ./logs:/app/logs
       - ./data:/app/data
       - ./reports:/app/reports
+    healthcheck:
+      # A successful TCP connect is enough to prove the startup finished: Spring Boot binds the
+      # connector only after every bean is up, so "the port answers" means "the application is
+      # ready" - which is what a deploy must wait for before it declares success. Done with bash's
+      # /dev/tcp because the JRE runtime image ships neither curl nor wget.
+      # Only meaningful for the online profiles: backtest/download run with no web container.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
 
 volumes:
   mysql-data:
